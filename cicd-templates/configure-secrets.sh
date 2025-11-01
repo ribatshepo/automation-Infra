@@ -70,7 +70,7 @@ EOF
 generate_template() {
     local output_file="github-secrets-configuration.md"
     
-    log "${BLUE}🔐 Generating GitHub secrets template...${NC}"
+    log "${BLUE} Generating GitHub secrets template...${NC}"
     
     cat > "${output_file}" << EOF
 # GitHub Repository Secrets Configuration

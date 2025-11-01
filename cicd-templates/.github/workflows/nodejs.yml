@@ -394,7 +394,7 @@ jobs:
     steps:
       - name: 'Deployment summary'
         run: |
-          echo "## 🟢 Node.js Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "##  Node.js Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Application**: ${{ needs.build-and-test.outputs.package-name }}" >> $GITHUB_STEP_SUMMARY
           echo "**Version**: ${{ needs.build-and-test.outputs.version }}" >> $GITHUB_STEP_SUMMARY

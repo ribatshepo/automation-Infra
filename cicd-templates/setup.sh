@@ -150,7 +150,7 @@ EOF
 generate_secrets_template() {
     local target_dir="$1"
     
-    log "${BLUE}🔐 Generating secrets template...${NC}"
+    log "${BLUE} Generating secrets template...${NC}"
     
     cat > "${target_dir}/github-secrets-template.md" << EOF
 # GitHub Secrets Configuration
