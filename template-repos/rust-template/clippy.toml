@@ -1,0 +1,25 @@
+# Clippy configuration
+avoid-breaking-exported-api = false
+msrv = "1.70.0"
+
+# Allowed lints (these won't trigger warnings)
+allow = [
+    "clippy::module_name_repetitions",
+    "clippy::similar_names",
+]
+
+# Denied lints (these will cause compilation to fail)
+deny = [
+    "clippy::all",
+    "clippy::pedantic",
+    "clippy::cargo",
+    "clippy::nursery",
+]
+
+# Warned lints (these will show warnings)
+warn = [
+    "clippy::use_debug",
+    "clippy::dbg_macro",
+    "clippy::todo",
+    "clippy::unimplemented",
+]
