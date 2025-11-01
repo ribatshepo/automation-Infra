@@ -2,7 +2,7 @@
 
 ##  **Project Summary**
 
-You now have a **comprehensive, modular CI/CD template system** that integrates seamlessly with **Harbor** (container registry) and **JFrog Artifactory** (package registry). This replaces SonarQube with **JFrog Xray** for security scanning, providing a unified ecosystem.
+You now have a **comprehensive, modular CI/CD template system** that integrates seamlessly with **Harbor** (container registry), **JFrog Artifactory** (package registry), and **Kubernetes** (orchestration). This includes full deployment capabilities from source code to running containers with JFrog Xray for security scanning.
 
 ##  **Repository Structure**
 
@@ -23,31 +23,53 @@ cicd-templates/
 │       ├── golang.yml                        # Go + modules + Docker
 │       ├── rust.yml                          # Rust + Cargo + Docker
 │       ├── nodejs.yml                        # Node.js + npm + Docker
-│       └── docker.yml                        # Docker-only builds
+│       ├── docker.yml                        # Docker-only builds
+│       ├── kubernetes-deploy.yml             # Kubernetes deployment
+│       ├── helm-deploy.yml                   # Helm chart deployment
+│       └── full-pipeline.yml                 # Complete CI/CD pipeline
+├──  helm-charts/                           # Helm chart templates
+│   └── app-template/                         # Generic application chart
+│       ├── Chart.yaml                        # Chart metadata
+│       ├── values.yaml                       # Default values
+│       └── templates/                        # Kubernetes templates
 ├──  docs/
-│   └── getting-started.md                    # Comprehensive guide
+│   ├── getting-started.md                    # Comprehensive guide
+│   └── kubernetes-quick-reference.md         # Kubernetes deployment guide
 ├──  examples/
-│   └── dotnet-webapi.md                      # Real-world example
+│   ├── dotnet-webapi.md                      # Real-world example
+│   └── kubernetes-deployments.md             # Kubernetes examples
 └──  scripts/                               # (Future utility scripts)
 ```
 
 ##  **Technology Support Matrix**
 
-| Technology | Package Registry | Container Registry | Security Scanning | Build Features |
-|------------|------------------|-------------------|-------------------|----------------|
-| **.NET** | Artifactory (NuGet) | Harbor | JFrog Xray + built-in | Multi-framework, tests, coverage |
-| **Python** | Artifactory (PyPI) | Harbor | JFrog Xray + bandit/safety | Multiple package managers, linting |
-| **Go** | Artifactory (Go modules) | Harbor | JFrog Xray + built-in | Cross-compilation, benchmarks |
-| **Rust** | Artifactory (Cargo) | Harbor | JFrog Xray + cargo-audit | Cross-compilation, clippy |
-| **Node.js** | Artifactory (npm) | Harbor | JFrog Xray + npm audit | Multiple package managers, E2E tests |
-| **Docker** | - | Harbor | Trivy + JFrog Xray | Multi-platform, manifest generation |
+| Technology | Package Registry | Container Registry | Kubernetes | Security Scanning | Build Features |
+|------------|------------------|-------------------|------------|-------------------|----------------|
+| **.NET** | Artifactory (NuGet) | Harbor | ✅ | JFrog Xray + built-in | Multi-framework, tests, coverage |
+| **Python** | Artifactory (PyPI) | Harbor | ✅ | JFrog Xray + bandit/safety | Multiple package managers, linting |
+| **Go** | Artifactory (Go modules) | Harbor | ✅ | JFrog Xray + built-in | Cross-compilation, benchmarks |
+| **Rust** | Artifactory (Cargo) | Harbor | ✅ | JFrog Xray + cargo-audit | Cross-compilation, clippy |
+| **Node.js** | Artifactory (npm) | Harbor | ✅ | JFrog Xray + npm audit | Multiple package managers, E2E tests |
+| **Docker** | - | Harbor | ✅ | Trivy + JFrog Xray | Multi-platform, manifest generation |
 
 ##  **Key Features**
+
+### ** Complete DevOps Pipeline**
+- **Source Code** → **Package Registry** (Artifactory) → **Container Registry** (Harbor) → **Kubernetes Deployment**
+- **Three deployment approaches**: Raw manifests, Helm charts, or full pipeline
+- **Environment-specific** deployments (dev/staging/prod)
+- **Auto-scaling** and **health monitoring** built-in
 
 ### ** JFrog-Centric Approach (NOT SonarQube)**
 - **JFrog Xray** for vulnerability scanning and policy enforcement
 - **JFrog Artifactory** for all package types (NuGet, PyPI, npm, Go, Cargo)
 - **Build Information** tracking and metadata
+
+### ** Kubernetes Integration**
+- **Raw Kubernetes manifests** with auto-generation
+- **Helm chart template** for complex deployments
+- **Harbor image pull secrets** automatically configured
+- **Ingress, autoscaling, and monitoring** included
 - **Unified security reporting** across all technologies
 
 ### ** Harbor Integration**

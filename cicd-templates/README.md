@@ -1,50 +1,60 @@
 # Universal CI/CD Templates
 
-A comprehensive, modular CI/CD template repository supporting multiple technologies with automated deployments to Harbor (Docker images) and JFrog Artifactory (packages).
+A comprehensive, modular CI/CD template repository supporting multiple technologies with automated deployments to Harbor (Docker images), JFrog Artifactory (packages), and Kubernetes orchestration.
 
 ## Features
 
 - **Multi-Technology Support**: .NET, Python, Go, Rust, Node.js, Docker
 - **Dual Registry Integration**: Harbor for containers, JFrog Artifactory for packages
+- **Kubernetes Deployment**: Native Kubernetes and Helm chart deployments
 - **Modular Design**: Reusable components and actions
 - **Security-First**: Built-in security scanning and vulnerability checks
 - **Flexible Deployment**: Support for staging, production, and custom environments
 - **Comprehensive Testing**: Unit tests, integration tests, and quality gates
+- **Full CI/CD Pipeline**: From source code to running containers in Kubernetes
 
 ## Repository Structure
 
 ```
 cicd-templates/
 ├── .github/
-│   ├── workflows/          # Main CI/CD workflows
-│   │   ├── dotnet.yml      # .NET build and deploy
-│   │   ├── python.yml      # Python build and deploy
-│   │   ├── golang.yml      # Go build and deploy
-│   │   ├── rust.yml        # Rust build and deploy
-│   │   ├── nodejs.yml      # Node.js build and deploy
-│   │   ├── docker.yml      # Docker build and push
-│   │   └── reusable/       # Reusable workflow templates
-│   └── actions/            # Custom composite actions
-│       ├── harbor-push/    # Harbor container push action
-│       ├── artifactory-push/ # Artifactory package push action
-│       ├── security-scan/  # Security scanning action
-│       └── quality-gate/   # Quality gate checks
-├── scripts/                # Utility scripts
-├── templates/              # Configuration templates
-├── docs/                   # Documentation
-└── examples/               # Example implementations
+│   ├── workflows/              # Main CI/CD workflows
+│   │   ├── dotnet.yml          # .NET build and deploy
+│   │   ├── python.yml          # Python build and deploy
+│   │   ├── golang.yml          # Go build and deploy
+│   │   ├── rust.yml            # Rust build and deploy
+│   │   ├── nodejs.yml          # Node.js build and deploy
+│   │   ├── docker.yml          # Docker build and push
+│   │   ├── kubernetes-deploy.yml # Kubernetes deployment
+│   │   ├── helm-deploy.yml     # Helm deployment
+│   │   └── full-pipeline.yml   # Complete CI/CD pipeline
+│   └── actions/                # Custom composite actions
+│       ├── harbor-push/        # Harbor container push action
+│       ├── artifactory-push/   # Artifactory package push action
+│       ├── security-scan/      # Security scanning action
+│       └── quality-gate/       # Quality gate checks
+├── helm-charts/                # Helm chart templates
+│   └── app-template/           # Generic application Helm chart
+├── scripts/                    # Utility scripts
+├── templates/                  # Configuration templates
+├── docs/                      # Documentation
+└── examples/                  # Example implementations
+    ├── dotnet-webapi.md       # .NET Web API example
+    └── kubernetes-deployments.md # Kubernetes deployment examples
 ```
 
-## Supported Technologies
+## Supported Technologies & Deployments
 
-| Technology | Package Registry | Container Registry | Workflow |
-|------------|------------------|-------------------|----------|
-| .NET | JFrog Artifactory (NuGet) | Harbor | `dotnet.yml` |
-| Python | JFrog Artifactory (PyPI) | Harbor | `python.yml` |
-| Go | JFrog Artifactory (Go) | Harbor | `golang.yml` |
-| Rust | JFrog Artifactory (Cargo) | Harbor | `rust.yml` |
-| Node.js | JFrog Artifactory (npm) | Harbor | `nodejs.yml` |
-| Docker | - | Harbor | `docker.yml` |
+| Technology | Package Registry | Container Registry | Kubernetes | Workflow |
+|------------|------------------|-------------------|------------|----------|
+| .NET | JFrog Artifactory (NuGet) | Harbor | ✅ | `dotnet.yml` |
+| Python | JFrog Artifactory (PyPI) | Harbor | ✅ | `python.yml` |
+| Go | JFrog Artifactory (Go) | Harbor | ✅ | `golang.yml` |
+| Rust | JFrog Artifactory (Cargo) | Harbor | ✅ | `rust.yml` |
+| Node.js | JFrog Artifactory (npm) | Harbor | ✅ | `nodejs.yml` |
+| Docker | - | Harbor | ✅ | `docker.yml` |
+| Kubernetes | - | - | ✅ | `kubernetes-deploy.yml` |
+| Helm | - | - | ✅ | `helm-deploy.yml` |
 
 ## Quick Start
 
@@ -133,6 +143,142 @@ with:
   security-scan: true
   deploy-environment: 'staging'
 ```
+
+## Kubernetes Deployments
+
+The CI/CD templates now include comprehensive Kubernetes deployment capabilities with three different approaches:
+
+### 1. Raw Kubernetes Manifests (`kubernetes-deploy.yml`)
+
+Deploy applications using generated Kubernetes manifests:
+
+```yaml
+name: 'Deploy to Kubernetes'
+on: [push]
+jobs:
+  deploy:
+    uses: ./.github/workflows/kubernetes-deploy.yml
+    with:
+      image-url: 'harbor.example.com/project/app:latest'
+      environment: 'production'
+      namespace: 'my-app'
+      replicas: 3
+      port: 8080
+      enable-ingress: true
+      ingress-host: 'app.example.com'
+      deploy-to-cluster: true
+    secrets:
+      KUBECONFIG: ${{ secrets.KUBECONFIG }}
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+```
+
+### 2. Helm Chart Deployments (`helm-deploy.yml`)
+
+Deploy using the provided Helm chart template or custom charts:
+
+```yaml
+name: 'Deploy with Helm'
+on: [push]
+jobs:
+  deploy:
+    uses: ./.github/workflows/helm-deploy.yml
+    with:
+      chart-path: './helm-charts/app-template'
+      release-name: 'my-app-prod'
+      namespace: 'production'
+      environment: 'production'
+      image-url: 'harbor.example.com/project/app:v1.2.3'
+      custom-values: |
+        ingress:
+          enabled: true
+          hosts:
+            - host: app.example.com
+              paths:
+                - path: /
+                  pathType: Prefix
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+    secrets:
+      KUBECONFIG: ${{ secrets.KUBECONFIG }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+```
+
+### 3. Full CI/CD Pipeline (`full-pipeline.yml`)
+
+Complete pipeline from source code to Kubernetes deployment:
+
+```yaml
+name: 'Full CI/CD Pipeline'
+on: [push]
+jobs:
+  deploy:
+    uses: ./.github/workflows/full-pipeline.yml
+    with:
+      dockerfile: './Dockerfile'
+      context: '.'
+      app-name: 'my-application'
+      environment: 'production'
+      namespace: 'apps'
+      port: 8080
+      replicas: 5
+      enable-ingress: true
+      ingress-host: 'my-app.example.com'
+      deploy-to-k8s: true
+      security-scan: true
+    secrets:
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      HARBOR_PROJECT: ${{ secrets.HARBOR_PROJECT }}
+      KUBECONFIG: ${{ secrets.KUBECONFIG }}
+```
+
+### Kubernetes Configuration Options
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `image-url` | Harbor image URL | Required |
+| `environment` | Deployment environment | `dev` |
+| `namespace` | Kubernetes namespace | `default` |
+| `replicas` | Number of replicas | `3` |
+| `port` | Application port | `8080` |
+| `enable-ingress` | Enable ingress | `false` |
+| `ingress-host` | Ingress hostname | Auto-generated |
+| `resource-requests-memory` | Memory requests | `256Mi` |
+| `resource-requests-cpu` | CPU requests | `250m` |
+| `resource-limits-memory` | Memory limits | `512Mi` |
+| `resource-limits-cpu` | CPU limits | `500m` |
+
+### Required Kubernetes Secrets
+
+```bash
+# Kubernetes configuration (base64 encoded)
+KUBECONFIG=<base64-encoded-kubeconfig>
+
+# Harbor registry credentials
+HARBOR_REGISTRY=harbor.example.com
+HARBOR_USERNAME=username
+HARBOR_PASSWORD=password
+HARBOR_PROJECT=project-name
+```
+
+### Helm Chart Features
+
+The included Helm chart template provides:
+
+- **Auto-scaling**: HorizontalPodAutoscaler with CPU/Memory metrics
+- **Health Checks**: Configurable liveness, readiness, and startup probes
+- **Security**: Pod security contexts and network policies
+- **Monitoring**: Prometheus annotations for metrics collection
+- **Storage**: Optional persistent volume claims
+- **Ingress**: Nginx ingress with TLS support
+- **Config Management**: ConfigMaps and Secrets integration
 
 ## Integration Examples
 

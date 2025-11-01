@@ -1,0 +1,268 @@
+name: 'Full CI/CD Pipeline - Harbor + Kubernetes'
+
+on:
+  workflow_call:
+    inputs:
+      dockerfile:
+        description: 'Path to Dockerfile'
+        required: false
+        default: './Dockerfile'
+        type: string
+      context:
+        description: 'Build context'
+        required: false
+        default: '.'
+        type: string
+      build-args:
+        description: 'Build arguments (key=value,key2=value2)'
+        required: false
+        default: ''
+        type: string
+      platforms:
+        description: 'Target platforms'
+        required: false
+        default: 'linux/amd64,linux/arm64'
+        type: string
+      app-name:
+        description: 'Application name'
+        required: false
+        default: ''
+        type: string
+      environment:
+        description: 'Deployment environment (dev/staging/prod)'
+        required: false
+        default: 'dev'
+        type: string
+      namespace:
+        description: 'Kubernetes namespace'
+        required: false
+        default: 'default'
+        type: string
+      replicas:
+        description: 'Number of replicas'
+        required: false
+        default: 3
+        type: number
+      port:
+        description: 'Application port'
+        required: false
+        default: 8080
+        type: number
+      enable-ingress:
+        description: 'Enable ingress'
+        required: false
+        default: false
+        type: boolean
+      ingress-host:
+        description: 'Ingress host'
+        required: false
+        default: ''
+        type: string
+      deploy-to-k8s:
+        description: 'Deploy to Kubernetes after build'
+        required: false
+        default: true
+        type: boolean
+      security-scan:
+        description: 'Enable security scanning'
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      HARBOR_REGISTRY:
+        required: true
+      HARBOR_USERNAME:
+        required: true
+      HARBOR_PASSWORD:
+        required: true
+      HARBOR_PROJECT:
+        required: true
+      KUBECONFIG:
+        required: false
+
+jobs:
+  build-and-push:
+    name: 'Build and Push to Harbor'
+    runs-on: ubuntu-latest
+    outputs:
+      image-url: ${{ steps.build.outputs.image-url }}
+      image-digest: ${{ steps.build.outputs.image-digest }}
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Determine image name'
+        id: image-name
+        run: |
+          if [[ -n "${{ inputs.app-name }}" ]]; then
+            IMAGE_NAME="${{ inputs.app-name }}"
+          else
+            IMAGE_NAME="${GITHUB_REPOSITORY##*/}"
+          fi
+          echo "image-name=$IMAGE_NAME" >> $GITHUB_OUTPUT
+          echo "Image name: $IMAGE_NAME"
+
+      - name: 'Build and push Docker image'
+        id: build
+        uses: ./.github/actions/harbor-push
+        with:
+          registry: ${{ secrets.HARBOR_REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+          project: ${{ secrets.HARBOR_PROJECT }}
+          image-name: ${{ steps.image-name.outputs.image-name }}
+          dockerfile: ${{ inputs.dockerfile }}
+          context: ${{ inputs.context }}
+          build-args: ${{ inputs.build-args }}
+          tags: ""
+          scan-image: ${{ inputs.security-scan }}
+          push-latest: true
+
+  deploy-to-kubernetes:
+    name: 'Deploy to Kubernetes'
+    if: inputs.deploy-to-k8s == true
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Setup kubectl'
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.29.0'
+
+      - name: 'Configure kubectl'
+        run: |
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > /tmp/kubeconfig
+          export KUBECONFIG=/tmp/kubeconfig
+          kubectl cluster-info
+
+      - name: 'Determine application name'
+        id: app-name
+        run: |
+          if [[ -n "${{ inputs.app-name }}" ]]; then
+            APP_NAME="${{ inputs.app-name }}"
+          else
+            APP_NAME="${GITHUB_REPOSITORY##*/}"
+          fi
+          echo "app-name=$APP_NAME" >> $GITHUB_OUTPUT
+
+      - name: 'Create namespace if not exists'
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          kubectl create namespace ${{ inputs.namespace }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: 'Create Harbor image pull secret'
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          kubectl create secret docker-registry harbor-registry \
+            --docker-server=${{ secrets.HARBOR_REGISTRY }} \
+            --docker-username=${{ secrets.HARBOR_USERNAME }} \
+            --docker-password=${{ secrets.HARBOR_PASSWORD }} \
+            --namespace=${{ inputs.namespace }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: 'Generate and apply Kubernetes manifests'
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          APP_NAME="${{ steps.app-name.outputs.app-name }}"
+          IMAGE_URL="${{ needs.build-and-push.outputs.image-url }}"
+          
+          # Create Deployment
+          cat > deployment.yaml << EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ${APP_NAME}
+            namespace: ${{ inputs.namespace }}
+            labels:
+              app: ${APP_NAME}
+              version: ${GITHUB_SHA::8}
+              environment: ${{ inputs.environment }}
+          spec:
+            replicas: ${{ inputs.replicas }}
+            selector:
+              matchLabels:
+                app: ${APP_NAME}
+            template:
+              metadata:
+                labels:
+                  app: ${APP_NAME}
+                  version: ${GITHUB_SHA::8}
+              spec:
+                imagePullSecrets:
+                - name: harbor-registry
+                containers:
+                - name: ${APP_NAME}
+                  image: ${IMAGE_URL}
+                  ports:
+                  - containerPort: ${{ inputs.port }}
+                  env:
+                  - name: ENVIRONMENT
+                    value: "${{ inputs.environment }}"
+                  resources:
+                    requests:
+                      memory: "256Mi"
+                      cpu: "250m"
+                    limits:
+                      memory: "512Mi"
+                      cpu: "500m"
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ${APP_NAME}-service
+            namespace: ${{ inputs.namespace }}
+          spec:
+            selector:
+              app: ${APP_NAME}
+            ports:
+            - port: 80
+              targetPort: ${{ inputs.port }}
+            type: ClusterIP
+          EOF
+          
+          # Apply manifests
+          kubectl apply -f deployment.yaml
+          kubectl rollout status deployment/${APP_NAME} -n ${{ inputs.namespace }} --timeout=300s
+
+      - name: 'Cleanup'
+        if: always()
+        run: rm -f /tmp/kubeconfig
+
+  security-analysis:
+    name: 'Security Analysis'
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: inputs.security-scan == true
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Run Trivy vulnerability scanner'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ needs.build-and-push.outputs.image-url }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: 'Upload Trivy scan results'
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: 'Generate security report'
+        run: |
+          echo "## Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image**: ${{ needs.build-and-push.outputs.image-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Scanner**: Trivy" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Detailed results are available in the Security tab." >> $GITHUB_STEP_SUMMARY

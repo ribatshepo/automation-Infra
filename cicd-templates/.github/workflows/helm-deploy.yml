@@ -1,0 +1,304 @@
+name: 'Helm Deployment'
+
+on:
+  workflow_call:
+    inputs:
+      chart-path:
+        description: 'Path to Helm chart'
+        required: false
+        default: './helm-charts/app-template'
+        type: string
+      release-name:
+        description: 'Helm release name'
+        required: false
+        default: ''
+        type: string
+      namespace:
+        description: 'Kubernetes namespace'
+        required: false
+        default: 'default'
+        type: string
+      environment:
+        description: 'Deployment environment'
+        required: false
+        default: 'dev'
+        type: string
+      image-url:
+        description: 'Docker image URL from Harbor'
+        required: true
+        type: string
+      values-file:
+        description: 'Custom values file path'
+        required: false
+        default: ''
+        type: string
+      custom-values:
+        description: 'Custom values (YAML format)'
+        required: false
+        default: ''
+        type: string
+      dry-run:
+        description: 'Perform dry-run deployment'
+        required: false
+        default: false
+        type: boolean
+      upgrade:
+        description: 'Upgrade if release exists'
+        required: false
+        default: true
+        type: boolean
+      wait:
+        description: 'Wait for deployment to complete'
+        required: false
+        default: true
+        type: boolean
+      timeout:
+        description: 'Timeout for deployment (minutes)'
+        required: false
+        default: 10
+        type: number
+    secrets:
+      KUBECONFIG:
+        required: true
+      HARBOR_USERNAME:
+        required: true
+      HARBOR_PASSWORD:
+        required: true
+      HARBOR_REGISTRY:
+        required: true
+
+jobs:
+  helm-deploy:
+    name: 'Deploy with Helm'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Setup Helm'
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.13.0'
+
+      - name: 'Setup kubectl'
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.29.0'
+
+      - name: 'Configure kubectl'
+        run: |
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > /tmp/kubeconfig
+          export KUBECONFIG=/tmp/kubeconfig
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: 'Determine release name'
+        id: release
+        run: |
+          if [[ -n "${{ inputs.release-name }}" ]]; then
+            RELEASE_NAME="${{ inputs.release-name }}"
+          else
+            RELEASE_NAME="${GITHUB_REPOSITORY##*/}-${{ inputs.environment }}"
+          fi
+          echo "release-name=$RELEASE_NAME" >> $GITHUB_OUTPUT
+          echo "Release name: $RELEASE_NAME"
+
+      - name: 'Create namespace if not exists'
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          kubectl create namespace ${{ inputs.namespace }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: 'Parse image URL'
+        id: image
+        run: |
+          IMAGE_URL="${{ inputs.image-url }}"
+          
+          # Extract registry, project, name, and tag from Harbor URL
+          # Format: harbor.example.com/project/image:tag
+          REGISTRY=$(echo $IMAGE_URL | cut -d'/' -f1)
+          PROJECT=$(echo $IMAGE_URL | cut -d'/' -f2)
+          IMAGE_WITH_TAG=$(echo $IMAGE_URL | cut -d'/' -f3-)
+          IMAGE_NAME=$(echo $IMAGE_WITH_TAG | cut -d':' -f1)
+          TAG=$(echo $IMAGE_WITH_TAG | cut -d':' -f2)
+          
+          echo "registry=$REGISTRY" >> $GITHUB_OUTPUT
+          echo "project=$PROJECT" >> $GITHUB_OUTPUT
+          echo "name=$IMAGE_NAME" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          
+          echo "Parsed image details:"
+          echo "Registry: $REGISTRY"
+          echo "Project: $PROJECT"
+          echo "Name: $IMAGE_NAME"
+          echo "Tag: $TAG"
+
+      - name: 'Create values file'
+        run: |
+          cat > /tmp/deployment-values.yaml << EOF
+          app:
+            name: ${{ steps.image.outputs.name }}
+            version: ${{ steps.image.outputs.tag }}
+          
+          image:
+            registry: ${{ steps.image.outputs.registry }}
+            repository: ${{ steps.image.outputs.project }}
+            name: ${{ steps.image.outputs.name }}
+            tag: ${{ steps.image.outputs.tag }}
+          
+          harbor:
+            enabled: true
+            registry: ${{ secrets.HARBOR_REGISTRY }}
+            project: ${{ steps.image.outputs.project }}
+            username: ${{ secrets.HARBOR_USERNAME }}
+            password: ${{ secrets.HARBOR_PASSWORD }}
+          
+          deployment:
+            annotations:
+              github.com/repository: "${{ github.repository }}"
+              github.com/commit: "${{ github.sha }}"
+              github.com/run-number: "${{ github.run_number }}"
+              github.com/environment: "${{ inputs.environment }}"
+          
+          monitoring:
+            enabled: true
+            annotations:
+              prometheus.io/scrape: "true"
+              prometheus.io/port: "8080"
+              prometheus.io/path: "/metrics"
+          EOF
+          
+          # Add custom values if provided
+          if [[ -n "${{ inputs.custom-values }}" ]]; then
+            echo "Adding custom values..."
+            echo '${{ inputs.custom-values }}' >> /tmp/deployment-values.yaml
+          fi
+          
+          echo "Generated values file:"
+          cat /tmp/deployment-values.yaml
+
+      - name: 'Validate Helm chart'
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          
+          VALUES_FILES="-f /tmp/deployment-values.yaml"
+          if [[ -n "${{ inputs.values-file }}" && -f "${{ inputs.values-file }}" ]]; then
+            VALUES_FILES="$VALUES_FILES -f ${{ inputs.values-file }}"
+          fi
+          
+          echo "Validating Helm chart..."
+          helm lint ${{ inputs.chart-path }} $VALUES_FILES
+          
+          echo "Generating templates for validation..."
+          helm template ${{ steps.release.outputs.release-name }} ${{ inputs.chart-path }} \
+            --namespace ${{ inputs.namespace }} \
+            $VALUES_FILES \
+            --debug > /tmp/rendered-templates.yaml
+          
+          echo "Validating against Kubernetes..."
+          kubectl apply --dry-run=client -f /tmp/rendered-templates.yaml
+
+      - name: 'Deploy with Helm (Dry Run)'
+        if: inputs.dry-run == true
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          
+          VALUES_FILES="-f /tmp/deployment-values.yaml"
+          if [[ -n "${{ inputs.values-file }}" && -f "${{ inputs.values-file }}" ]]; then
+            VALUES_FILES="$VALUES_FILES -f ${{ inputs.values-file }}"
+          fi
+          
+          echo "Performing Helm dry-run deployment..."
+          helm upgrade --install ${{ steps.release.outputs.release-name }} ${{ inputs.chart-path }} \
+            --namespace ${{ inputs.namespace }} \
+            --create-namespace \
+            $VALUES_FILES \
+            --dry-run \
+            --debug
+
+      - name: 'Deploy with Helm'
+        if: inputs.dry-run == false
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          
+          VALUES_FILES="-f /tmp/deployment-values.yaml"
+          if [[ -n "${{ inputs.values-file }}" && -f "${{ inputs.values-file }}" ]]; then
+            VALUES_FILES="$VALUES_FILES -f ${{ inputs.values-file }}"
+          fi
+          
+          HELM_ARGS=""
+          if [[ "${{ inputs.wait }}" == "true" ]]; then
+            HELM_ARGS="$HELM_ARGS --wait --timeout=${{ inputs.timeout }}m"
+          fi
+          
+          echo "Deploying with Helm..."
+          helm upgrade --install ${{ steps.release.outputs.release-name }} ${{ inputs.chart-path }} \
+            --namespace ${{ inputs.namespace }} \
+            --create-namespace \
+            $VALUES_FILES \
+            $HELM_ARGS \
+            --debug
+
+      - name: 'Get deployment status'
+        if: inputs.dry-run == false
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          
+          echo "Helm Release Status:"
+          helm status ${{ steps.release.outputs.release-name }} -n ${{ inputs.namespace }}
+          
+          echo -e "\nKubernetes Resources:"
+          kubectl get all -l app.kubernetes.io/instance=${{ steps.release.outputs.release-name }} -n ${{ inputs.namespace }}
+          
+          echo -e "\nPod Details:"
+          kubectl get pods -l app.kubernetes.io/instance=${{ steps.release.outputs.release-name }} -n ${{ inputs.namespace }} -o wide
+
+      - name: 'Run post-deployment tests'
+        if: inputs.dry-run == false
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          
+          echo "Running Helm tests..."
+          if helm test ${{ steps.release.outputs.release-name }} -n ${{ inputs.namespace }} --timeout=5m; then
+            echo "Helm tests passed!"
+          else
+            echo "Helm tests failed or not available"
+          fi
+
+      - name: 'Upload deployment artifacts'
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-deployment-${{ inputs.environment }}
+          path: |
+            /tmp/deployment-values.yaml
+            /tmp/rendered-templates.yaml
+          retention-days: 30
+
+      - name: 'Deployment summary'
+        run: |
+          echo "## Helm Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Release Name**: ${{ steps.release.outputs.release-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Chart**: ${{ inputs.chart-path }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Namespace**: ${{ inputs.namespace }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image**: ${{ inputs.image-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Dry Run**: ${{ inputs.dry-run }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ inputs.dry-run }}" == "false" ]]; then
+            echo "### Deployment Status:" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Successfully deployed to Kubernetes" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Dry Run Results:" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Dry run completed successfully" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 'Cleanup'
+        if: always()
+        run: |
+          rm -f /tmp/kubeconfig
+          rm -f /tmp/deployment-values.yaml
+          rm -f /tmp/rendered-templates.yaml

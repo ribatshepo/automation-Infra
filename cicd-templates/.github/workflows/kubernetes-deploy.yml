@@ -1,0 +1,478 @@
+name: 'Kubernetes Deployment'
+
+on:
+  workflow_call:
+    inputs:
+      image-url:
+        description: 'Harbor image URL to deploy'
+        required: true
+        type: string
+      environment:
+        description: 'Deployment environment (dev/staging/prod)'
+        required: false
+        default: 'dev'
+        type: string
+      namespace:
+        description: 'Kubernetes namespace'
+        required: false
+        default: 'default'
+        type: string
+      app-name:
+        description: 'Application name'
+        required: false
+        default: ''
+        type: string
+      replicas:
+        description: 'Number of replicas'
+        required: false
+        default: 3
+        type: number
+      port:
+        description: 'Application port'
+        required: false
+        default: 8080
+        type: number
+      service-type:
+        description: 'Kubernetes service type (ClusterIP/NodePort/LoadBalancer)'
+        required: false
+        default: 'ClusterIP'
+        type: string
+      resource-requests-memory:
+        description: 'Memory requests'
+        required: false
+        default: '256Mi'
+        type: string
+      resource-requests-cpu:
+        description: 'CPU requests'
+        required: false
+        default: '250m'
+        type: string
+      resource-limits-memory:
+        description: 'Memory limits'
+        required: false
+        default: '512Mi'
+        type: string
+      resource-limits-cpu:
+        description: 'CPU limits'
+        required: false
+        default: '500m'
+        type: string
+      config-map:
+        description: 'ConfigMap data (JSON format)'
+        required: false
+        default: '{}'
+        type: string
+      enable-ingress:
+        description: 'Enable ingress'
+        required: false
+        default: false
+        type: boolean
+      ingress-host:
+        description: 'Ingress host'
+        required: false
+        default: ''
+        type: string
+      health-check-path:
+        description: 'Health check endpoint path'
+        required: false
+        default: '/health'
+        type: string
+      deploy-to-cluster:
+        description: 'Actually deploy to cluster (false for dry-run)'
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      KUBECONFIG:
+        required: true
+      HARBOR_REGISTRY:
+        required: true
+      HARBOR_USERNAME:
+        required: true
+      HARBOR_PASSWORD:
+        required: true
+
+jobs:
+  kubernetes-deploy:
+    name: 'Deploy to Kubernetes'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Setup kubectl'
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.29.0'
+
+      - name: 'Setup Helm'
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.13.0'
+
+      - name: 'Configure kubectl'
+        run: |
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > /tmp/kubeconfig
+          export KUBECONFIG=/tmp/kubeconfig
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: 'Determine application name'
+        id: app-name
+        run: |
+          if [[ -n "${{ inputs.app-name }}" ]]; then
+            APP_NAME="${{ inputs.app-name }}"
+          else
+            APP_NAME="${GITHUB_REPOSITORY##*/}"
+          fi
+          echo "app-name=$APP_NAME" >> $GITHUB_OUTPUT
+          echo "Application name: $APP_NAME"
+
+      - name: 'Create namespace if not exists'
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          kubectl create namespace ${{ inputs.namespace }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: 'Create Harbor image pull secret'
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          kubectl create secret docker-registry harbor-registry \
+            --docker-server=${{ secrets.HARBOR_REGISTRY }} \
+            --docker-username=${{ secrets.HARBOR_USERNAME }} \
+            --docker-password=${{ secrets.HARBOR_PASSWORD }} \
+            --namespace=${{ inputs.namespace }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: 'Generate Kubernetes manifests'
+        id: manifests
+        run: |
+          APP_NAME="${{ steps.app-name.outputs.app-name }}"
+          IMAGE_URL="${{ inputs.image-url }}"
+          NAMESPACE="${{ inputs.namespace }}"
+          ENVIRONMENT="${{ inputs.environment }}"
+          
+          # Create ConfigMap if provided
+          if [[ "${{ inputs.config-map }}" != "{}" ]]; then
+            cat > configmap.yaml << EOF
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: ${APP_NAME}-config
+            namespace: ${NAMESPACE}
+            labels:
+              app: ${APP_NAME}
+              environment: ${ENVIRONMENT}
+          data:
+          EOF
+            echo '${{ inputs.config-map }}' | jq -r 'to_entries[] | "  \(.key): \(.value | @sh)"' >> configmap.yaml
+          fi
+          
+          # Create Deployment
+          cat > deployment.yaml << EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ${APP_NAME}
+            namespace: ${NAMESPACE}
+            labels:
+              app: ${APP_NAME}
+              version: ${GITHUB_SHA::8}
+              environment: ${ENVIRONMENT}
+            annotations:
+              deployment.kubernetes.io/revision: "${GITHUB_RUN_NUMBER}"
+              github.com/repository: "${GITHUB_REPOSITORY}"
+              github.com/commit: "${GITHUB_SHA}"
+          spec:
+            replicas: ${{ inputs.replicas }}
+            strategy:
+              type: RollingUpdate
+              rollingUpdate:
+                maxUnavailable: 1
+                maxSurge: 1
+            selector:
+              matchLabels:
+                app: ${APP_NAME}
+            template:
+              metadata:
+                labels:
+                  app: ${APP_NAME}
+                  version: ${GITHUB_SHA::8}
+                  environment: ${ENVIRONMENT}
+                annotations:
+                  prometheus.io/scrape: "true"
+                  prometheus.io/port: "${{ inputs.port }}"
+                  prometheus.io/path: "/metrics"
+              spec:
+                imagePullSecrets:
+                - name: harbor-registry
+                containers:
+                - name: ${APP_NAME}
+                  image: ${IMAGE_URL}
+                  imagePullPolicy: Always
+                  ports:
+                  - name: http
+                    containerPort: ${{ inputs.port }}
+                    protocol: TCP
+                  env:
+                  - name: ENVIRONMENT
+                    value: "${ENVIRONMENT}"
+                  - name: NAMESPACE
+                    value: "${NAMESPACE}"
+                  - name: POD_NAME
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.name
+                  - name: POD_IP
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: status.podIP
+          EOF
+          
+          # Add ConfigMap mount if exists
+          if [[ "${{ inputs.config-map }}" != "{}" ]]; then
+            cat >> deployment.yaml << EOF
+                  envFrom:
+                  - configMapRef:
+                      name: ${APP_NAME}-config
+          EOF
+          fi
+          
+          # Add resources and health checks
+          cat >> deployment.yaml << EOF
+                  resources:
+                    requests:
+                      memory: "${{ inputs.resource-requests-memory }}"
+                      cpu: "${{ inputs.resource-requests-cpu }}"
+                    limits:
+                      memory: "${{ inputs.resource-limits-memory }}"
+                      cpu: "${{ inputs.resource-limits-cpu }}"
+                  livenessProbe:
+                    httpGet:
+                      path: ${{ inputs.health-check-path }}
+                      port: http
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                    timeoutSeconds: 5
+                    failureThreshold: 3
+                  readinessProbe:
+                    httpGet:
+                      path: ${{ inputs.health-check-path }}
+                      port: http
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+                    timeoutSeconds: 3
+                    failureThreshold: 3
+                  startupProbe:
+                    httpGet:
+                      path: ${{ inputs.health-check-path }}
+                      port: http
+                    initialDelaySeconds: 10
+                    periodSeconds: 10
+                    timeoutSeconds: 5
+                    failureThreshold: 30
+          EOF
+          
+          # Create Service
+          cat > service.yaml << EOF
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ${APP_NAME}-service
+            namespace: ${NAMESPACE}
+            labels:
+              app: ${APP_NAME}
+              environment: ${ENVIRONMENT}
+          spec:
+            type: ${{ inputs.service-type }}
+            selector:
+              app: ${APP_NAME}
+            ports:
+            - name: http
+              port: 80
+              targetPort: http
+              protocol: TCP
+          EOF
+          
+          # Create Ingress if enabled
+          if [[ "${{ inputs.enable-ingress }}" == "true" ]]; then
+            INGRESS_HOST="${{ inputs.ingress-host }}"
+            if [[ -z "$INGRESS_HOST" ]]; then
+              INGRESS_HOST="${APP_NAME}-${ENVIRONMENT}.local"
+            fi
+            
+            cat > ingress.yaml << EOF
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ${APP_NAME}-ingress
+            namespace: ${NAMESPACE}
+            labels:
+              app: ${APP_NAME}
+              environment: ${ENVIRONMENT}
+            annotations:
+              nginx.ingress.kubernetes.io/rewrite-target: /
+              nginx.ingress.kubernetes.io/ssl-redirect: "true"
+              cert-manager.io/cluster-issuer: "letsencrypt-prod"
+          spec:
+            ingressClassName: nginx
+            tls:
+            - hosts:
+              - ${INGRESS_HOST}
+              secretName: ${APP_NAME}-tls
+            rules:
+            - host: ${INGRESS_HOST}
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: ${APP_NAME}-service
+                      port:
+                        number: 80
+          EOF
+          fi
+          
+          # Create HorizontalPodAutoscaler
+          cat > hpa.yaml << EOF
+          apiVersion: autoscaling/v2
+          kind: HorizontalPodAutoscaler
+          metadata:
+            name: ${APP_NAME}-hpa
+            namespace: ${NAMESPACE}
+            labels:
+              app: ${APP_NAME}
+              environment: ${ENVIRONMENT}
+          spec:
+            scaleTargetRef:
+              apiVersion: apps/v1
+              kind: Deployment
+              name: ${APP_NAME}
+            minReplicas: ${{ inputs.replicas }}
+            maxReplicas: 9
+            metrics:
+            - type: Resource
+              resource:
+                name: cpu
+                target:
+                  type: Utilization
+                  averageUtilization: 70
+            - type: Resource
+              resource:
+                name: memory
+                target:
+                  type: Utilization
+                  averageUtilization: 80
+            behavior:
+              scaleDown:
+                stabilizationWindowSeconds: 300
+                policies:
+                - type: Pods
+                  value: 1
+                  periodSeconds: 60
+              scaleUp:
+                stabilizationWindowSeconds: 60
+                policies:
+                - type: Pods
+                  value: 2
+                  periodSeconds: 60
+          EOF
+          
+          echo "Generated Kubernetes manifests:"
+          ls -la *.yaml
+
+      - name: 'Validate manifests'
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          echo "Validating Kubernetes manifests..."
+          
+          for manifest in *.yaml; do
+            if [[ -f "$manifest" ]]; then
+              echo "Validating $manifest"
+              kubectl apply --dry-run=client -f "$manifest"
+            fi
+          done
+
+      - name: 'Deploy to Kubernetes'
+        if: inputs.deploy-to-cluster == true
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          echo "Deploying to Kubernetes cluster..."
+          
+          # Apply manifests in order
+          if [[ -f "configmap.yaml" ]]; then
+            kubectl apply -f configmap.yaml
+          fi
+          
+          kubectl apply -f deployment.yaml
+          kubectl apply -f service.yaml
+          kubectl apply -f hpa.yaml
+          
+          if [[ -f "ingress.yaml" ]]; then
+            kubectl apply -f ingress.yaml
+          fi
+          
+          # Wait for deployment to be ready
+          kubectl rollout status deployment/${{ steps.app-name.outputs.app-name }} -n ${{ inputs.namespace }} --timeout=300s
+
+      - name: 'Get deployment status'
+        if: inputs.deploy-to-cluster == true
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          APP_NAME="${{ steps.app-name.outputs.app-name }}"
+          NAMESPACE="${{ inputs.namespace }}"
+          
+          echo "Deployment Status:"
+          kubectl get deployment ${APP_NAME} -n ${NAMESPACE} -o wide
+          
+          echo -e "\nPod Status:"
+          kubectl get pods -l app=${APP_NAME} -n ${NAMESPACE} -o wide
+          
+          echo -e "\nService Status:"
+          kubectl get service ${APP_NAME}-service -n ${NAMESPACE} -o wide
+          
+          if [[ -f "ingress.yaml" ]]; then
+            echo -e "\nIngress Status:"
+            kubectl get ingress ${APP_NAME}-ingress -n ${NAMESPACE} -o wide
+          fi
+
+      - name: 'Upload Kubernetes manifests'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubernetes-manifests-${{ inputs.environment }}
+          path: |
+            *.yaml
+          retention-days: 30
+
+      - name: 'Deployment summary'
+        run: |
+          APP_NAME="${{ steps.app-name.outputs.app-name }}"
+          echo "## Kubernetes Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Application**: ${APP_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image**: ${{ inputs.image-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Namespace**: ${{ inputs.namespace }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Replicas**: ${{ inputs.replicas }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Service Type**: ${{ inputs.service-type }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed to Cluster**: ${{ inputs.deploy-to-cluster }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit**: ${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ inputs.enable-ingress }}" == "true" ]]; then
+            INGRESS_HOST="${{ inputs.ingress-host }}"
+            if [[ -z "$INGRESS_HOST" ]]; then
+              INGRESS_HOST="${APP_NAME}-${{ inputs.environment }}.local"
+            fi
+            echo "**Ingress Host**: ${INGRESS_HOST}" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Generated Manifests:" >> $GITHUB_STEP_SUMMARY
+          ls -la *.yaml | awk '{print "- " $9}' >> $GITHUB_STEP_SUMMARY
+
+      - name: 'Cleanup'
+        if: always()
+        run: |
+          rm -f /tmp/kubeconfig
