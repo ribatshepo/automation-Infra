@@ -37,7 +37,7 @@ echo " REPOSITORY STRUCTURE:"
 tree -I 'node_modules|.git' /home/tshepo/ansible-infra/cicd-templates/ | head -30
 
 echo ""
-echo "⚡ QUICK START:"
+echo " QUICK START:"
 echo "  1. Copy templates to your project:"
 echo "     cd /path/to/your/project"
 echo "     /home/tshepo/ansible-infra/cicd-templates/setup.sh . --interactive"
