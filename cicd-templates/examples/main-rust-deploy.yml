@@ -1,0 +1,175 @@
+name: 'Deploy Rust Web Service'
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Dockerfile'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: ${{ vars.DEFAULT_ENVIRONMENT || 'dev' }}
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+
+jobs:
+  # Build and test Rust application
+  build-rust:
+    name: 'Build Rust Application'
+    uses: ./.github/workflows/rust.yml
+    with:
+      rust-version: ${{ vars.RUST_VERSION || 'stable' }}
+      run-tests: ${{ vars.RUN_TESTS || true }}
+      run-clippy: ${{ vars.RUN_CLIPPY || true }}
+      security-scan: ${{ vars.SECURITY_SCAN_ENABLED || true }}
+      build-docker: ${{ vars.BUILD_DOCKER || true }}
+      cross-compile: ${{ vars.CROSS_COMPILE || true }}
+      deploy-environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+    secrets:
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      HARBOR_PROJECT: ${{ secrets.HARBOR_PROJECT }}
+      ARTIFACTORY_URL: ${{ secrets.ARTIFACTORY_URL }}
+      ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+      ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+
+  # Deploy to staging environment
+  deploy-staging:
+    name: 'Deploy to Staging'
+    if: github.ref == 'refs/heads/develop' || (github.event.inputs.environment == 'staging')
+    needs: build-rust
+    uses: ./.github/workflows/kubernetes-deploy.yml
+    with:
+      image-url: ${{ needs.build-rust.outputs.image-url }}
+      environment: staging
+      namespace: ${{ vars.NAMESPACE_PREFIX || 'rust-services' }}-staging
+      app-name: ${{ vars.APP_NAME || 'rust-web-service' }}
+      replicas: ${{ vars.STAGING_REPLICAS || 2 }}
+      port: ${{ vars.APP_PORT || 8080 }}
+      resource-requests-memory: ${{ vars.STAGING_MEMORY_REQUEST || '128Mi' }}
+      resource-requests-cpu: ${{ vars.STAGING_CPU_REQUEST || '100m' }}
+      resource-limits-memory: ${{ vars.STAGING_MEMORY_LIMIT || '256Mi' }}
+      resource-limits-cpu: ${{ vars.STAGING_CPU_LIMIT || '500m' }}
+      enable-ingress: true
+      ingress-host: ${{ format('staging-rust.{0}', vars.DOMAIN_SUFFIX || 'example.com') }}
+      health-check-path: '/health'
+      deploy-to-cluster: true
+    secrets:
+      KUBECONFIG: ${{ secrets.STAGING_KUBECONFIG }}
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+
+  # Deploy to production environment
+  deploy-production:
+    name: 'Deploy to Production'
+    if: github.ref == 'refs/heads/main' && (github.event.inputs.environment == 'prod' || github.event.inputs.environment == '')
+    needs: build-rust
+    environment: production
+    uses: ./.github/workflows/helm-deploy.yml
+    with:
+      chart-path: ${{ vars.HELM_CHART_PATH || './helm-charts/app-template' }}
+      release-name: rust-web-service-prod
+      namespace: ${{ vars.NAMESPACE_PREFIX || 'rust-services' }}-prod
+      environment: prod
+      image-url: ${{ needs.build-rust.outputs.image-url }}
+      dry-run: ${{ vars.HELM_DRY_RUN || false }}
+      wait: ${{ vars.HELM_WAIT || true }}
+      timeout: ${{ vars.DEPLOY_TIMEOUT || 15 }}
+      custom-values: |
+        app:
+          port: ${{ vars.APP_PORT || 8080 }}
+          healthCheckPath: ${{ vars.HEALTH_CHECK_PATH || '/health' }}
+        
+        deployment:
+          replicas: ${{ vars.PROD_REPLICAS || 5 }}
+          annotations:
+            deployment.kubernetes.io/revision: "${{ github.run_number }}"
+        
+        resources:
+          requests:
+            memory: ${{ vars.PROD_MEMORY_REQUEST || '256Mi' }}
+            cpu: ${{ vars.PROD_CPU_REQUEST || '250m' }}
+          limits:
+            memory: ${{ vars.PROD_MEMORY_LIMIT || '512Mi' }}
+            cpu: ${{ vars.PROD_CPU_LIMIT || '1000m' }}
+        
+        autoscaling:
+          enabled: ${{ vars.AUTOSCALING_ENABLED || true }}
+          minReplicas: ${{ vars.PROD_MIN_REPLICAS || 3 }}
+          maxReplicas: ${{ vars.PROD_MAX_REPLICAS || 10 }}
+          targetCPUUtilizationPercentage: ${{ vars.CPU_TARGET_PERCENTAGE || 70 }}
+          targetMemoryUtilizationPercentage: ${{ vars.MEMORY_TARGET_PERCENTAGE || 80 }}
+        
+        ingress:
+          enabled: ${{ vars.INGRESS_ENABLED || true }}
+          className: ${{ vars.INGRESS_CLASS || 'nginx' }}
+          annotations:
+            cert-manager.io/cluster-issuer: ${{ vars.CERT_ISSUER || 'letsencrypt-prod' }}
+            nginx.ingress.kubernetes.io/rate-limit: ${{ vars.RATE_LIMIT || '100' }}
+          hosts:
+            - host: ${{ format('rust.{0}', vars.DOMAIN_SUFFIX || 'example.com') }}
+              paths:
+                - path: /
+                  pathType: Prefix
+          tls:
+            - secretName: rust-service-tls
+              hosts:
+                - ${{ format('rust.{0}', vars.DOMAIN_SUFFIX || 'example.com') }}
+        
+        env:
+          RUST_ENV: ${{ vars.RUST_ENV || 'production' }}
+          RUST_LOG: ${{ vars.RUST_LOG_LEVEL || 'info' }}
+          PORT: ${{ vars.APP_PORT || 8080 }}
+        
+        monitoring:
+          enabled: ${{ vars.MONITORING_ENABLED || true }}
+          annotations:
+            prometheus.io/scrape: ${{ vars.PROMETHEUS_SCRAPE || 'true' }}
+            prometheus.io/port: ${{ vars.PROMETHEUS_PORT || vars.APP_PORT || '8080' }}
+            prometheus.io/path: ${{ vars.PROMETHEUS_PATH || '/metrics' }}
+    secrets:
+      KUBECONFIG: ${{ secrets.KUBECONFIG }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+
+  # Load testing for production deployment
+  load-testing:
+    name: 'Load Testing'
+    if: github.ref == 'refs/heads/main' && github.event.inputs.environment == 'prod'
+    needs: deploy-production
+    runs-on: ${{ vars.RUNNER_TYPE || 'ubuntu-latest' }}
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+      
+      - name: 'Install k6'
+        run: |
+          sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys ${{ vars.K6_GPG_KEY || 'C5AD17C747E3415A3642D57D77C6C491D6AC1D69' }}
+          echo "deb ${{ vars.K6_REPO || 'https://dl.k6.io/deb' }} stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install k6
+      
+      - name: 'Run load tests'
+        run: |
+          k6 run --vus ${{ vars.LOAD_TEST_VUS || 50 }} --duration ${{ vars.LOAD_TEST_DURATION || '5m' }} ${{ vars.LOAD_TEST_SCRIPT || 'load-tests/rust-service.js' }}
+        env:
+          API_BASE_URL: ${{ format('https://rust.{0}', vars.DOMAIN_SUFFIX || 'example.com') }}
+      
+      - name: 'Upload load test results'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ vars.LOAD_TEST_ARTIFACT_NAME || 'load-test-results' }}
+          path: ${{ vars.LOAD_TEST_RESULTS_PATH || 'test-results/' }}

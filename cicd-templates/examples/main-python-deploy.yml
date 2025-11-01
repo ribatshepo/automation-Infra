@@ -1,0 +1,119 @@
+name: 'Deploy Python FastAPI Application'
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - '*.py'
+      - 'requirements*.txt'
+      - 'pyproject.toml'
+      - 'Dockerfile'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: ${{ vars.DEFAULT_ENVIRONMENT || 'dev' }}
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+      python_version:
+        description: 'Python version'
+        required: false
+        default: ${{ vars.DEFAULT_PYTHON_VERSION || '3.11' }}
+        type: string
+
+jobs:
+  # Build and test Python application
+  build-python:
+    name: 'Build Python Application'
+    uses: ./.github/workflows/python.yml
+    with:
+      python-version: ${{ github.event.inputs.python_version || vars.PYTHON_VERSION || '3.11' }}
+      package-manager: ${{ vars.PACKAGE_MANAGER || 'pip' }}
+      run-tests: ${{ vars.RUN_TESTS || true }}
+      run-linting: ${{ vars.RUN_LINTING || true }}
+      security-scan: ${{ vars.SECURITY_SCAN_ENABLED || true }}
+      build-docker: ${{ vars.BUILD_DOCKER || true }}
+      deploy-environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+    secrets:
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      HARBOR_PROJECT: ${{ secrets.HARBOR_PROJECT }}
+      ARTIFACTORY_URL: ${{ secrets.ARTIFACTORY_URL }}
+      ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+      ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+
+  # Deploy to Kubernetes with custom configuration
+  deploy-to-k8s:
+    name: 'Deploy to Kubernetes'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    needs: build-python
+    uses: ./.github/workflows/kubernetes-deploy.yml
+    with:
+      image-url: ${{ needs.build-python.outputs.image-url }}
+      environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+      namespace: ${{ vars.NAMESPACE_PREFIX || 'python-apps' }}-${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+      app-name: ${{ vars.APP_NAME || 'fastapi-app' }}
+      replicas: ${{ github.ref == 'refs/heads/main' && (vars.PROD_REPLICAS || 3) || (vars.DEV_REPLICAS || 1) }}
+      port: ${{ vars.APP_PORT || 8000 }}
+      service-type: ${{ vars.SERVICE_TYPE || 'ClusterIP' }}
+      resource-requests-memory: ${{ github.ref == 'refs/heads/main' && (vars.PROD_MEMORY_REQUEST || '512Mi') || (vars.DEV_MEMORY_REQUEST || '256Mi') }}
+      resource-requests-cpu: ${{ github.ref == 'refs/heads/main' && (vars.PROD_CPU_REQUEST || '500m') || (vars.DEV_CPU_REQUEST || '250m') }}
+      resource-limits-memory: ${{ github.ref == 'refs/heads/main' && (vars.PROD_MEMORY_LIMIT || '1Gi') || (vars.DEV_MEMORY_LIMIT || '512Mi') }}
+      resource-limits-cpu: ${{ github.ref == 'refs/heads/main' && (vars.PROD_CPU_LIMIT || '1000m') || (vars.DEV_CPU_LIMIT || '500m') }}
+      config-map: |
+        {
+          "DATABASE_URL": "${{ secrets.DATABASE_URL }}",
+          "REDIS_URL": "${{ secrets.REDIS_URL }}",
+          "LOG_LEVEL": "${{ vars.LOG_LEVEL || 'info' }}"
+        }
+      enable-ingress: ${{ vars.INGRESS_ENABLED || true }}
+      ingress-host: ${{ github.ref == 'refs/heads/main' && format('api.{0}', vars.DOMAIN_SUFFIX || 'example.com') || format('dev-api.{0}', vars.DOMAIN_SUFFIX || 'example.com') }}
+      health-check-path: ${{ vars.HEALTH_CHECK_PATH || '/health' }}
+      deploy-to-cluster: ${{ vars.DEPLOY_TO_CLUSTER || true }}
+    secrets:
+      KUBECONFIG: ${{ secrets.KUBECONFIG }}
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+
+  # Database migration for production
+  database-migration:
+    name: 'Database Migration'
+    if: github.ref == 'refs/heads/main' && github.event.inputs.environment == 'prod'
+    needs: [build-python, deploy-to-k8s]
+    runs-on: ${{ vars.RUNNER_TYPE || 'ubuntu-latest' }}
+    environment: ${{ vars.PROD_ENVIRONMENT_NAME || 'production' }}
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+      
+      - name: 'Setup Python'
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ github.event.inputs.python_version || vars.PYTHON_VERSION || '3.11' }}
+      
+      - name: 'Install dependencies'
+        run: |
+          pip install -r ${{ vars.REQUIREMENTS_FILE || 'requirements.txt' }}
+      
+      - name: 'Run database migrations'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          # Add your migration commands here
+          # Example: alembic upgrade head
+          echo "Running database migrations..."
+          if [[ -n "${{ vars.MIGRATION_COMMAND }}" ]]; then
+            echo "Executing: ${{ vars.MIGRATION_COMMAND }}"
+            ${{ vars.MIGRATION_COMMAND }}
+          else
+            echo "No migration command configured. Set MIGRATION_COMMAND variable."
+          fi

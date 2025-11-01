@@ -1,0 +1,132 @@
+name: 'Deploy Go Microservice'
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: ${{ vars.DEFAULT_ENVIRONMENT || 'dev' }}
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+
+jobs:
+  # Build and test Go application
+  build-go:
+    name: 'Build Go Application'
+    uses: ./.github/workflows/golang.yml
+    with:
+      go-version: ${{ vars.GO_VERSION || '1.21' }}
+      run-tests: ${{ vars.RUN_TESTS || true }}
+      run-benchmarks: ${{ github.ref == 'refs/heads/main' && (vars.RUN_BENCHMARKS || true) || false }}
+      security-scan: ${{ vars.SECURITY_SCAN_ENABLED || true }}
+      build-docker: ${{ vars.BUILD_DOCKER || true }}
+      cross-compile: ${{ vars.CROSS_COMPILE || true }}
+      deploy-environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+    secrets:
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      HARBOR_PROJECT: ${{ secrets.HARBOR_PROJECT }}
+      ARTIFACTORY_URL: ${{ secrets.ARTIFACTORY_URL }}
+      ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+      ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+
+  # Deploy using Helm with custom values
+  deploy-with-helm:
+    name: 'Deploy with Helm'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    needs: build-go
+    uses: ./.github/workflows/helm-deploy.yml
+    with:
+      chart-path: ${{ vars.HELM_CHART_PATH || './helm-charts/app-template' }}
+      release-name: go-microservice-${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+      namespace: ${{ vars.NAMESPACE_PREFIX || 'microservices' }}-${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+      environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+      image-url: ${{ needs.build-go.outputs.image-url }}
+      dry-run: ${{ github.event_name == 'pull_request' && (vars.PR_DRY_RUN || true) || false }}
+      custom-values: |
+        app:
+          port: ${{ vars.APP_PORT || 8080 }}
+          healthCheckPath: ${{ vars.HEALTH_CHECK_PATH || '/health' }}
+        
+        deployment:
+          replicas: ${{ github.ref == 'refs/heads/main' && (vars.PROD_REPLICAS || 5) || (vars.DEV_REPLICAS || 2) }}
+        
+        resources:
+          requests:
+            memory: ${{ github.ref == 'refs/heads/main' && (vars.PROD_MEMORY_REQUEST || '256Mi') || (vars.DEV_MEMORY_REQUEST || '128Mi') }}
+            cpu: ${{ github.ref == 'refs/heads/main' && (vars.PROD_CPU_REQUEST || '250m') || (vars.DEV_CPU_REQUEST || '100m') }}
+          limits:
+            memory: ${{ github.ref == 'refs/heads/main' && (vars.PROD_MEMORY_LIMIT || '512Mi') || (vars.DEV_MEMORY_LIMIT || '256Mi') }}
+            cpu: ${{ github.ref == 'refs/heads/main' && (vars.PROD_CPU_LIMIT || '1000m') || (vars.DEV_CPU_LIMIT || '500m') }}
+        
+        autoscaling:
+          enabled: ${{ vars.AUTOSCALING_ENABLED || true }}
+          minReplicas: ${{ github.ref == 'refs/heads/main' && (vars.PROD_MIN_REPLICAS || 3) || (vars.DEV_MIN_REPLICAS || 1) }}
+          maxReplicas: ${{ github.ref == 'refs/heads/main' && (vars.PROD_MAX_REPLICAS || 10) || (vars.DEV_MAX_REPLICAS || 5) }}
+          targetCPUUtilizationPercentage: ${{ vars.CPU_TARGET_PERCENTAGE || 70 }}
+        
+        ingress:
+          enabled: ${{ vars.INGRESS_ENABLED || true }}
+          hosts:
+            - host: ${{ github.ref == 'refs/heads/main' && format('api.{0}', vars.DOMAIN_SUFFIX || 'example.com') || format('dev-api.{0}', vars.DOMAIN_SUFFIX || 'example.com') }}
+              paths:
+                - path: ${{ vars.API_PATH || '/api/v1' }}
+                  pathType: ${{ vars.INGRESS_PATH_TYPE || 'Prefix' }}
+        
+        env:
+          GO_ENV: ${{ github.ref == 'refs/heads/main' && (vars.PROD_GO_ENV || 'production') || (vars.DEV_GO_ENV || 'development') }}
+          PORT: ${{ vars.APP_PORT || '8080' }}
+          LOG_LEVEL: ${{ github.ref == 'refs/heads/main' && (vars.PROD_LOG_LEVEL || 'info') || (vars.DEV_LOG_LEVEL || 'debug') }}
+        
+        configMap:
+          enabled: ${{ vars.CONFIG_MAP_ENABLED || true }}
+          data:
+            FEATURE_FLAGS: ${{ vars.FEATURE_FLAGS || '{"new_api": true, "metrics": true}' }}
+            TIMEOUT_SECONDS: ${{ vars.TIMEOUT_SECONDS || '30' }}
+    secrets:
+      KUBECONFIG: ${{ secrets.KUBECONFIG }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+
+  # Integration tests against deployed service
+  integration-tests:
+    name: 'Integration Tests'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    needs: deploy-with-helm
+    runs-on: ${{ vars.RUNNER_TYPE || 'ubuntu-latest' }}
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+      
+      - name: 'Setup Go'
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ vars.GO_VERSION || '1.21' }}
+      
+      - name: 'Run integration tests'
+        env:
+          API_BASE_URL: ${{ github.ref == 'refs/heads/main' && format('https://api.{0}', vars.DOMAIN_SUFFIX || 'example.com') || format('https://dev-api.{0}', vars.DOMAIN_SUFFIX || 'example.com') }}
+        run: |
+          go test ${{ vars.INTEGRATION_TEST_PACKAGE || './tests/integration/...' }} -v -timeout=${{ vars.TEST_TIMEOUT || '10m' }}
+      
+      - name: 'Upload test results'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ vars.INTEGRATION_TEST_ARTIFACT_NAME || 'integration-test-results' }}
+          path: ${{ vars.TEST_RESULTS_PATH || 'test-results.xml' }}

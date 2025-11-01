@@ -1,0 +1,105 @@
+name: 'Deploy .NET Web API'
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - '*.csproj'
+      - 'Dockerfile'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: ${{ vars.DEFAULT_ENVIRONMENT || 'dev' }}
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+      deploy_to_k8s:
+        description: 'Deploy to Kubernetes'
+        required: false
+        default: ${{ vars.DEFAULT_DEPLOY_TO_K8S || true }}
+        type: boolean
+
+jobs:
+  # Build and push .NET application
+  build-dotnet:
+    name: 'Build .NET Application'
+    uses: ./.github/workflows/dotnet.yml
+    with:
+      build-config: ${{ github.ref == 'refs/heads/main' && (vars.PROD_BUILD_CONFIG || 'Release') || (vars.DEV_BUILD_CONFIG || 'Debug') }}
+      target-framework: ${{ vars.TARGET_FRAMEWORK || 'net8.0' }}
+      run-tests: ${{ vars.RUN_TESTS || true }}
+      security-scan: ${{ vars.SECURITY_SCAN_ENABLED || true }}
+      deploy-environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+    secrets:
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      HARBOR_PROJECT: ${{ secrets.HARBOR_PROJECT }}
+      ARTIFACTORY_URL: ${{ secrets.ARTIFACTORY_URL }}
+      ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+      ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+
+  # Deploy to Kubernetes using Helm
+  deploy-to-kubernetes:
+    name: 'Deploy to Kubernetes'
+    if: ${{ (github.event.inputs.deploy_to_k8s != 'false') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') }}
+    needs: build-dotnet
+    uses: ./.github/workflows/helm-deploy.yml
+    with:
+      chart-path: ${{ vars.HELM_CHART_PATH || './helm-charts/app-template' }}
+      release-name: dotnet-webapi-${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+      namespace: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && (vars.PROD_NAMESPACE || 'production') || (vars.DEV_NAMESPACE || 'development')) }}
+      environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+      image-url: ${{ needs.build-dotnet.outputs.image-url }}
+      dry-run: ${{ github.event_name == 'pull_request' && (vars.PR_DRY_RUN || true) || false }}
+      custom-values: |
+        app:
+          port: ${{ vars.APP_PORT || 5000 }}
+          healthCheckPath: ${{ vars.HEALTH_CHECK_PATH || '/health' }}
+        
+        resources:
+          requests:
+            memory: ${{ github.ref == 'refs/heads/main' && (vars.PROD_MEMORY_REQUEST || '512Mi') || (vars.DEV_MEMORY_REQUEST || '256Mi') }}
+            cpu: ${{ github.ref == 'refs/heads/main' && (vars.PROD_CPU_REQUEST || '500m') || (vars.DEV_CPU_REQUEST || '250m') }}
+          limits:
+            memory: ${{ github.ref == 'refs/heads/main' && (vars.PROD_MEMORY_LIMIT || '1Gi') || (vars.DEV_MEMORY_LIMIT || '512Mi') }}
+            cpu: ${{ github.ref == 'refs/heads/main' && (vars.PROD_CPU_LIMIT || '1000m') || (vars.DEV_CPU_LIMIT || '500m') }}
+        
+        ingress:
+          enabled: ${{ vars.INGRESS_ENABLED || true }}
+          hosts:
+            - host: ${{ github.ref == 'refs/heads/main' && format('api.{0}', vars.DOMAIN_SUFFIX || 'example.com') || format('dev-api.{0}', vars.DOMAIN_SUFFIX || 'example.com') }}
+              paths:
+                - path: ${{ vars.INGRESS_PATH || '/' }}
+                  pathType: ${{ vars.INGRESS_PATH_TYPE || 'Prefix' }}
+        
+        env:
+          ASPNETCORE_ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && (vars.PROD_ASPNETCORE_ENV || 'Production') || (vars.DEV_ASPNETCORE_ENV || 'Development') }}
+          ConnectionStrings__DefaultConnection: ${{ secrets.DATABASE_CONNECTION_STRING }}
+    secrets:
+      KUBECONFIG: ${{ secrets.KUBECONFIG }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+
+  # Notification on completion
+  notify:
+    name: 'Notify Deployment'
+    if: always()
+    needs: [build-dotnet, deploy-to-kubernetes]
+    runs-on: ${{ vars.RUNNER_TYPE || 'ubuntu-latest' }}
+    steps:
+      - name: 'Send notification'
+        run: |
+          if [[ "${{ needs.deploy-to-kubernetes.result }}" == "success" ]]; then
+            echo " .NET Web API deployed successfully to ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'production' || 'development') }}"
+          else
+            echo " Deployment failed"
+          fi

@@ -1,0 +1,97 @@
+name: 'Deploy Node.js Application'
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'package*.json'
+      - 'Dockerfile'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: ${{ vars.DEFAULT_ENVIRONMENT || 'dev' }}
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+
+jobs:
+  # Build and test Node.js application
+  build-nodejs:
+    name: 'Build Node.js Application'
+    uses: ./.github/workflows/nodejs.yml
+    with:
+      node-version: ${{ vars.NODE_VERSION || '20' }}
+      package-manager: ${{ vars.PACKAGE_MANAGER || 'npm' }}
+      run-tests: ${{ vars.RUN_TESTS || true }}
+      run-e2e-tests: ${{ github.ref == 'refs/heads/main' && (vars.RUN_E2E_TESTS || true) || false }}
+      security-scan: ${{ vars.SECURITY_SCAN_ENABLED || true }}
+      build-docker: ${{ vars.BUILD_DOCKER || true }}
+      deploy-environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+    secrets:
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      HARBOR_PROJECT: ${{ secrets.HARBOR_PROJECT }}
+      ARTIFACTORY_URL: ${{ secrets.ARTIFACTORY_URL }}
+      ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+      ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+
+  # Deploy using the full pipeline workflow
+  deploy-full-pipeline:
+    name: 'Deploy with Full Pipeline'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    needs: build-nodejs
+    uses: ./.github/workflows/full-pipeline.yml
+    with:
+      dockerfile: ${{ vars.DOCKERFILE_PATH || './Dockerfile' }}
+      context: ${{ vars.BUILD_CONTEXT || '.' }}
+      app-name: ${{ vars.APP_NAME || 'nodejs-app' }}
+      environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+      namespace: ${{ github.ref == 'refs/heads/main' && (vars.PROD_NAMESPACE || 'production') || (vars.DEV_NAMESPACE || 'development') }}
+      replicas: ${{ github.ref == 'refs/heads/main' && (vars.PROD_REPLICAS || 5) || (vars.DEV_REPLICAS || 2) }}
+      port: ${{ vars.APP_PORT || 3000 }}
+      enable-ingress: ${{ vars.INGRESS_ENABLED || true }}
+      ingress-host: ${{ github.ref == 'refs/heads/main' && format('app.{0}', vars.DOMAIN_SUFFIX || 'example.com') || format('dev-app.{0}', vars.DOMAIN_SUFFIX || 'example.com') }}
+      deploy-to-k8s: ${{ vars.DEPLOY_TO_K8S || true }}
+      security-scan: ${{ vars.SECURITY_SCAN_ENABLED || true }}
+    secrets:
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      HARBOR_PROJECT: ${{ secrets.HARBOR_PROJECT }}
+      KUBECONFIG: ${{ secrets.KUBECONFIG }}
+
+  # Performance testing for production deployments
+  performance-test:
+    name: 'Performance Testing'
+    if: github.ref == 'refs/heads/main' && github.event.inputs.environment == 'prod'
+    needs: deploy-full-pipeline
+    runs-on: ${{ vars.RUNNER_TYPE || 'ubuntu-latest' }}
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+      
+      - name: 'Run load tests'
+        run: |
+          echo "Running performance tests against ${{ vars.PERFORMANCE_TEST_ENVIRONMENT || 'production' }} deployment..."
+          # Add your performance testing commands here
+          # Example: k6 run performance-tests.js
+          if [[ -f "${{ vars.PERFORMANCE_TEST_SCRIPT || 'performance-tests.js' }}" ]]; then
+            echo "Executing performance test script..."
+            # k6 run ${{ vars.PERFORMANCE_TEST_SCRIPT || 'performance-tests.js' }}
+          else
+            echo "No performance test script found at ${{ vars.PERFORMANCE_TEST_SCRIPT || 'performance-tests.js' }}"
+          fi
+      
+      - name: 'Upload test results'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ vars.PERFORMANCE_TEST_ARTIFACT_NAME || 'performance-test-results' }}
+          path: ${{ vars.PERFORMANCE_TEST_RESULTS_PATH || 'test-results/' }}

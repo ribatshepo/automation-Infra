@@ -1,0 +1,248 @@
+name: 'Deploy Docker Application'
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'Dockerfile*'
+      - 'docker-compose.yml'
+      - 'src/**'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+      app_name:
+        description: 'Application name (defaults to repository name)'
+        required: false
+        type: string
+      image_tag:
+        description: 'Image tag (defaults to commit SHA)'
+        required: false
+        type: string
+      domain_suffix:
+        description: 'Domain suffix for ingress'
+        required: false
+        default: ${{ vars.DEFAULT_DOMAIN_SUFFIX || 'example.com' }}
+        type: string
+      helm_chart_path:
+        description: 'Path to Helm chart'
+        required: false
+        default: ${{ vars.DEFAULT_HELM_CHART_PATH || './helm-charts/app-template' }}
+        type: string
+      namespace_prefix:
+        description: 'Namespace prefix'
+        required: false
+        default: ''
+        type: string
+      build_platform:
+        description: 'Build platform'
+        required: false
+        default: ${{ vars.DEFAULT_BUILD_PLATFORM || 'linux/amd64,linux/arm64' }}
+        type: string
+
+env:
+  # Dynamic application name - uses input or derives from repository
+  APP_NAME: ${{ github.event.inputs.app_name || github.event.repository.name }}
+  # Dynamic image tag - uses input or commit SHA
+  IMAGE_TAG: ${{ github.event.inputs.image_tag || github.sha }}
+  # Dynamic environment
+  ENVIRONMENT: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+  # Dynamic domain suffix
+  DOMAIN_SUFFIX: ${{ github.event.inputs.domain_suffix || vars.DOMAIN_SUFFIX || 'example.com' }}
+  # Dynamic namespace
+  NAMESPACE: ${{ github.event.inputs.namespace_prefix }}${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+
+jobs:
+    # Build Docker image and push to Harbor
+  build-docker:
+    name: 'Build & Push Docker Image'
+    uses: ./.github/workflows/docker.yml
+    with:
+      dockerfile: ${{ vars.DOCKERFILE_PATH || './Dockerfile' }}
+      context: ${{ vars.BUILD_CONTEXT || '.' }}
+      build-args: |
+        NODE_ENV=${{ env.ENVIRONMENT == 'prod' && (vars.PROD_NODE_ENV || 'production') || (vars.DEV_NODE_ENV || 'development') }}
+        API_VERSION=${{ env.IMAGE_TAG }}
+        BUILD_DATE=${{ github.event.head_commit.timestamp }}
+      platforms: ${{ github.event.inputs.build_platform || vars.BUILD_PLATFORMS || 'linux/amd64,linux/arm64' }}
+      image-name: ${{ env.APP_NAME }}
+      tags: ${{ env.IMAGE_TAG }},latest
+      security-scan: ${{ vars.SECURITY_SCAN_ENABLED || true }}
+      push-latest: ${{ vars.PUSH_LATEST || true }}
+      environment: ${{ env.ENVIRONMENT }}
+    secrets:
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      HARBOR_PROJECT: ${{ secrets.HARBOR_PROJECT }}
+
+  # Deploy to development with simple manifests
+  deploy-dev:
+    name: 'Deploy to Development'
+    if: env.ENVIRONMENT == 'dev'
+    needs: build-docker
+    uses: ./.github/workflows/kubernetes-deploy.yml
+    with:
+      image-url: ${{ needs.build-docker.outputs.image-url }}
+      environment: ${{ env.ENVIRONMENT }}
+      namespace: ${{ env.NAMESPACE }}
+      app-name: ${{ env.APP_NAME }}
+      replicas: ${{ vars.DEV_REPLICAS || 1 }}
+      port: ${{ vars.APP_PORT || 8080 }}
+      service-type: ${{ vars.DEV_SERVICE_TYPE || 'NodePort' }}
+      resource-requests-memory: ${{ vars.DEV_MEMORY_REQUEST || '128Mi' }}
+      resource-requests-cpu: ${{ vars.DEV_CPU_REQUEST || '100m' }}
+      resource-limits-memory: ${{ vars.DEV_MEMORY_LIMIT || '256Mi' }}
+      resource-limits-cpu: ${{ vars.DEV_CPU_LIMIT || '200m' }}
+      health-check-path: ${{ vars.HEALTH_CHECK_PATH || '/status' }}
+      deploy-to-cluster: true
+    secrets:
+      KUBECONFIG: ${{ secrets.DEV_KUBECONFIG || secrets.KUBECONFIG }}
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+
+  # Deploy to staging/production with Helm
+  deploy-staging-prod:
+    name: 'Deploy to Staging/Production'
+    if: env.ENVIRONMENT == 'staging' || env.ENVIRONMENT == 'prod'
+    needs: build-docker
+    uses: ./.github/workflows/helm-deploy.yml
+    with:
+      chart-path: ${{ github.event.inputs.helm_chart_path || vars.HELM_CHART_PATH || './helm-charts/app-template' }}
+      release-name: ${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}
+      namespace: ${{ env.NAMESPACE }}
+      environment: ${{ env.ENVIRONMENT }}
+      image-url: ${{ needs.build-docker.outputs.image-url }}
+      dry-run: ${{ vars.HELM_DRY_RUN || false }}
+      upgrade: ${{ vars.HELM_UPGRADE || true }}
+      wait: ${{ vars.HELM_WAIT || true }}
+      timeout: ${{ vars.DEPLOY_TIMEOUT || 10 }}
+      values-file: ${{ vars.HELM_VALUES_FILE_TEMPLATE && format(vars.HELM_VALUES_FILE_TEMPLATE, env.ENVIRONMENT) || format('./helm/values-{0}.yaml', env.ENVIRONMENT) }}
+      custom-values: |
+        app:
+          name: ${{ env.APP_NAME }}
+          port: ${{ vars.APP_PORT || 8080 }}
+          healthCheckPath: ${{ vars.HEALTH_CHECK_PATH || '/status' }}
+        
+        image:
+          tag: ${{ env.IMAGE_TAG }}
+        
+        deployment:
+          replicas: ${{ env.ENVIRONMENT == 'staging' && (vars.STAGING_REPLICAS || 2) || (vars.PROD_REPLICAS || 5) }}
+          annotations:
+            github.com/commit: "${{ github.sha }}"
+            github.com/workflow: "${{ github.workflow }}"
+            github.com/repository: "${{ github.repository }}"
+        
+        resources:
+          requests:
+            memory: ${{ env.ENVIRONMENT == 'staging' && (vars.STAGING_MEMORY_REQUEST || '256Mi') || (vars.PROD_MEMORY_REQUEST || '512Mi') }}
+            cpu: ${{ env.ENVIRONMENT == 'staging' && (vars.STAGING_CPU_REQUEST || '250m') || (vars.PROD_CPU_REQUEST || '500m') }}
+          limits:
+            memory: ${{ env.ENVIRONMENT == 'staging' && (vars.STAGING_MEMORY_LIMIT || '512Mi') || (vars.PROD_MEMORY_LIMIT || '1Gi') }}
+            cpu: ${{ env.ENVIRONMENT == 'staging' && (vars.STAGING_CPU_LIMIT || '500m') || (vars.PROD_CPU_LIMIT || '1000m') }}
+        
+        autoscaling:
+          enabled: ${{ vars.AUTOSCALING_ENABLED || true }}
+          minReplicas: ${{ env.ENVIRONMENT == 'staging' && (vars.STAGING_MIN_REPLICAS || 1) || (vars.PROD_MIN_REPLICAS || 3) }}
+          maxReplicas: ${{ env.ENVIRONMENT == 'staging' && (vars.STAGING_MAX_REPLICAS || 5) || (vars.PROD_MAX_REPLICAS || 15) }}
+        
+        ingress:
+          enabled: ${{ vars.INGRESS_ENABLED || true }}
+          hosts:
+            - host: ${{ env.ENVIRONMENT == 'staging' && format('staging-{0}.{1}', env.APP_NAME, env.DOMAIN_SUFFIX) || format('{0}.{1}', env.APP_NAME, env.DOMAIN_SUFFIX) }}
+              paths:
+                - path: ${{ vars.INGRESS_PATH || '/' }}
+                  pathType: ${{ vars.INGRESS_PATH_TYPE || 'Prefix' }}
+        
+        env:
+          NODE_ENV: ${{ env.ENVIRONMENT == 'staging' && (vars.STAGING_NODE_ENV || 'staging') || (vars.PROD_NODE_ENV || 'production') }}
+          LOG_LEVEL: ${{ env.ENVIRONMENT == 'staging' && (vars.STAGING_LOG_LEVEL || 'debug') || (vars.PROD_LOG_LEVEL || 'info') }}
+          METRICS_ENABLED: ${{ vars.METRICS_ENABLED || 'true' }}
+          APP_VERSION: ${{ env.IMAGE_TAG }}
+        
+        configMap:
+          enabled: ${{ vars.CONFIG_MAP_ENABLED || true }}
+          data:
+            config.json: |
+              {
+                "features": {
+                  "analytics": ${{ env.ENVIRONMENT != 'staging' && (vars.ANALYTICS_ENABLED || true) || false }},
+                  "debugging": ${{ env.ENVIRONMENT == 'staging' && (vars.DEBUG_ENABLED || true) || false }},
+                  "monitoring": ${{ vars.MONITORING_ENABLED || true }}
+                },
+                "limits": {
+                  "maxConnections": ${{ env.ENVIRONMENT == 'staging' && (vars.STAGING_MAX_CONN || 100) || (vars.PROD_MAX_CONN || 1000) }},
+                  "timeout": ${{ vars.REQUEST_TIMEOUT || 30 }}
+                },
+                "environment": "${{ env.ENVIRONMENT }}"
+              }
+    secrets:
+      KUBECONFIG: ${{ env.ENVIRONMENT == 'staging' && secrets.STAGING_KUBECONFIG || secrets.KUBECONFIG }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+
+  # Smoke tests after deployment
+  smoke-tests:
+    name: 'Smoke Tests'
+    if: always() && (needs.deploy-dev.result == 'success' || needs.deploy-staging-prod.result == 'success')
+    needs: [build-docker, deploy-dev, deploy-staging-prod]
+    runs-on: ${{ vars.RUNNER_TYPE || 'ubuntu-latest' }}
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+      
+      - name: 'Run smoke tests'
+        run: |
+          # Determine the endpoint based on environment and configuration
+          if [[ "${{ env.ENVIRONMENT }}" == "dev" ]]; then
+            ENDPOINT="${{ vars.DEV_PROTOCOL || 'http' }}://${{ env.APP_NAME }}.${{ vars.DEV_SUBDOMAIN || 'dev' }}.${{ env.DOMAIN_SUFFIX }}"
+          elif [[ "${{ env.ENVIRONMENT }}" == "staging" ]]; then
+            ENDPOINT="${{ vars.STAGING_PROTOCOL || 'https' }}://${{ vars.STAGING_SUBDOMAIN || 'staging' }}-${{ env.APP_NAME }}.${{ env.DOMAIN_SUFFIX }}"
+          else
+            ENDPOINT="${{ vars.PROD_PROTOCOL || 'https' }}://${{ env.APP_NAME }}.${{ env.DOMAIN_SUFFIX }}"
+          fi
+          
+          echo "Running smoke tests against $ENDPOINT"
+          
+          # Use configurable health check path
+          HEALTH_PATH="${{ vars.HEALTH_CHECK_PATH || '/status' }}"
+          
+          # Basic health check with retry logic
+          for i in {1..${{ vars.HEALTH_CHECK_RETRIES || 5 }}}; do
+            if curl -f "$ENDPOINT$HEALTH_PATH"; then
+              echo " Health check passed"
+              break
+            else
+              echo " Health check failed, attempt $i/${{ vars.HEALTH_CHECK_RETRIES || 5 }}"
+              if [[ $i -eq ${{ vars.HEALTH_CHECK_RETRIES || 5 }} ]]; then
+                exit 1
+              fi
+              sleep ${{ vars.HEALTH_CHECK_INTERVAL || 30 }}
+            fi
+          done
+          
+          # API endpoint test if configured
+          if [[ -n "${{ vars.API_HEALTH_PATH }}" ]]; then
+            curl -f "$ENDPOINT${{ vars.API_HEALTH_PATH }}" || exit 1
+            echo " API health check passed"
+          fi
+          
+          echo " All smoke tests passed for ${{ env.ENVIRONMENT }} environment"
+      
+      - name: 'Notify on failure'
+        if: failure()
+        run: |
+          echo " Smoke tests failed for ${{ env.ENVIRONMENT }} deployment"
+          echo "::error title=Smoke Test Failure::Deployment verification failed for ${{ env.APP_NAME }} in ${{ env.ENVIRONMENT }}"
