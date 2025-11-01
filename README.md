@@ -124,10 +124,6 @@ ansible-infra/
 │   ├──  vars.yml                 # Configuration variables
 │   └──  vault.yml                # Encrypted secrets
 │
-├──  nexus/                       # Nexus repository manager
-│   ├──  install-nexus.yml        # Ansible playbook
-│   └──  vars.yml                 # Configuration variables
-│
 ├──  qemu-agent/                  # QEMU Guest Agent
 │   ├──  deploy-qemu-guest-agent.sh
 │   ├──  install-qemu-guest-agent.yml
