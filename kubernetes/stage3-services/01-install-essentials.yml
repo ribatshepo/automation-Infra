@@ -1,0 +1,142 @@
+---
+- name: Install Essential Kubernetes Services
+  hosts: k8s_masters[0]
+  become: yes
+  vars_files:
+    - ../vars.yml
+    - ../vault.yml
+
+  tasks:
+    - name: Install Metrics Server
+      shell: |
+        kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+        kubectl patch deployment metrics-server -n kube-system --type='json' -p='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls"}]'
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      when: addons_enabled.metrics_server
+      tags:
+        - services
+        - metrics
+
+    - name: Wait for Metrics Server to be ready
+      shell: kubectl wait --for=condition=available --timeout=300s deployment/metrics-server -n kube-system
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      when: addons_enabled.metrics_server
+      tags:
+        - services
+        - metrics
+
+    - name: Install Kubernetes Dashboard
+      shell: |
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      when: addons_enabled.dashboard
+      tags:
+        - services
+        - dashboard
+
+    - name: Create Dashboard Admin Service Account
+      shell: |
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: admin-user
+          namespace: kubernetes-dashboard
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: admin-user
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: cluster-admin
+        subjects:
+        - kind: ServiceAccount
+          name: admin-user
+          namespace: kubernetes-dashboard
+        EOF
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      when: addons_enabled.dashboard
+      tags:
+        - services
+        - dashboard
+
+    - name: Get Dashboard Admin Token
+      shell: |
+        kubectl -n kubernetes-dashboard create token admin-user
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: dashboard_token
+      when: addons_enabled.dashboard
+      tags:
+        - services
+        - dashboard
+
+    - name: Install NGINX Ingress Controller
+      shell: |
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/baremetal/deploy.yaml
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      when: addons_enabled.ingress_nginx
+      tags:
+        - services
+        - ingress
+
+    - name: Wait for Ingress Controller to be ready
+      shell: kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      when: addons_enabled.ingress_nginx
+      tags:
+        - services
+        - ingress
+
+    - name: Create Local Storage Class
+      shell: |
+        cat <<EOF | kubectl apply -f -
+        apiVersion: storage.k8s.io/v1
+        kind: StorageClass
+        metadata:
+          name: {{ item.name }}
+        provisioner: {{ item.provisioner }}
+        reclaimPolicy: {{ item.reclaim_policy }}
+        volumeBindingMode: {{ item.volume_binding_mode }}
+        EOF
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      loop: "{{ storage_classes }}"
+      tags:
+        - services
+        - storage
+
+    - name: Display service installation status
+      debug:
+        msg: |
+          Essential Services Installation Complete:
+          =======================================
+          {% if addons_enabled.metrics_server %}
+          Metrics Server: Installed
+          {% endif %}
+          {% if addons_enabled.dashboard %}
+          Kubernetes Dashboard: Installed
+             Dashboard Token: {{ dashboard_token.stdout if dashboard_token is defined else 'Not generated' }}
+             Access: kubectl proxy --address='0.0.0.0' --accept-hosts='^.*'
+             URL: http://localhost:8001/api/v1/namespaces/kubernetes-dashboard/services/https:kubernetes-dashboard:/proxy/
+          {% endif %}
+          {% if addons_enabled.ingress_nginx %}
+          NGINX Ingress Controller: Installed
+          {% endif %}
+          Storage Classes: {{ storage_classes | length }} configured
+          
+          Next Steps:
+          1. Configure external access to services
+          2. Set up monitoring and logging
+          3. Deploy your applications
+      tags:
+        - services
+        - summary

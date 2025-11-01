@@ -1,0 +1,165 @@
+---
+# Kubernetes Cluster Configuration Variables
+
+# Kubernetes Version
+kubernetes_version: "1.29.0"
+kubernetes_cni_version: "1.4.0"
+kubernetes_cri_tools_version: "1.29.0"
+
+# Cluster Configuration
+cluster_name: "production-k8s"
+cluster_domain: "cluster.local"
+cluster_dns: "10.96.0.10"
+
+# Network Configuration
+pod_network_cidr: "10.244.0.0/16"
+service_network_cidr: "10.96.0.0/12"
+kubernetes_pod_cidr: "10.244.0.0/16"
+kubernetes_service_cidr: "10.96.0.0/12"
+kubernetes_api_port: 6443
+kubernetes_api_endpoint: "k8s-api"
+
+# HAProxy Load Balancer Configuration
+haproxy_vip: "10.100.10.210"  # HAProxy server IP
+haproxy_api_port: 6443
+haproxy_stats_port: 8404
+haproxy_stats_user: "admin"
+
+# Master Nodes Configuration
+kubernetes_masters:
+  - name: "master-1"
+    ip: "10.100.10.230"
+    hostname: "master-1"
+  - name: "master-2"
+    ip: "10.100.10.231"
+    hostname: "master-2"
+  - name: "master-3"
+    ip: "10.100.10.232"
+    hostname: "master-3"
+
+# Worker Nodes Configuration
+kubernetes_workers:
+  - name: "worker-1"
+    ip: "10.100.10.240"
+    hostname: "worker-1"
+  - name: "worker-2"
+    ip: "10.100.10.241"
+    hostname: "worker-2"
+  - name: "worker-3"
+    ip: "10.100.10.242"
+    hostname: "worker-3"
+  - name: "worker-4"
+    ip: "10.100.10.243"
+    hostname: "worker-4"
+  - name: "worker-5"
+    ip: "10.100.10.244"
+    hostname: "worker-5"
+  - name: "worker-6"
+    ip: "10.100.10.245"
+    hostname: "worker-6"
+
+# Container Runtime Configuration
+container_runtime: "containerd"
+containerd_version: "1.7.13"
+runc_version: "1.1.12"
+
+# CNI Plugin (Flannel)
+cni_plugin: "flannel"
+flannel_version: "v0.24.2"
+
+# Etcd Configuration
+etcd_version: "3.5.12"
+etcd_data_dir: "/var/lib/etcd"
+etcd_backup_dir: "/backup/etcd"
+
+# Certificates Configuration
+cert_validity_days: 3650
+cert_country: "ZA"
+cert_state: "Gauteng"
+cert_city: "Johannesburg"
+cert_organization: "Production Infrastructure"
+cert_organizational_unit: "IT Department"
+
+# Node Configuration
+node_max_pods: 110
+node_max_open_files: 1000000
+node_max_processes: 1048576
+
+# System Configuration
+disable_swap: true
+enable_ip_forward: true
+bridge_nf_call_iptables: true
+
+# Package Repositories
+kubernetes_apt_repo: "https://pkgs.k8s.io/core:/stable:/v1.29/deb/"
+docker_apt_repo: "https://download.docker.com/linux/ubuntu"
+
+# Firewall Configuration
+firewall_enabled: true
+
+# Master Node Ports
+master_ports:
+  - 6443   # Kubernetes API server
+  - 2379   # etcd server client API
+  - 2380   # etcd server peer API
+  - 10250  # Kubelet API
+  - 10259  # kube-scheduler
+  - 10257  # kube-controller-manager
+
+# Worker Node Ports
+worker_ports:
+  - 10250      # Kubelet API
+  - 30000-32767 # NodePort Services
+
+# Backup Configuration
+backup_enabled: true
+backup_schedule: "0 2 * * *"  # Daily at 2 AM
+backup_retention_days: 30
+
+# Logging Configuration
+log_level: "INFO"
+audit_log_enabled: true
+audit_log_path: "/var/log/kubernetes/audit.log"
+
+# Feature Gates (optional)
+feature_gates: {}
+
+# Admission Controllers
+admission_controllers:
+  - "NamespaceLifecycle"
+  - "LimitRanger"
+  - "ServiceAccount"
+  - "DefaultStorageClass"
+  - "ResourceQuota"
+  - "NodeRestriction"
+
+# Cluster Add-ons
+addons_enabled:
+  metrics_server: true
+  dashboard: true
+  ingress_nginx: true
+  cert_manager: false
+
+# Storage Configuration
+storage_classes:
+  - name: "local-storage"
+    provisioner: "kubernetes.io/no-provisioner"
+    reclaim_policy: "Retain"
+    volume_binding_mode: "WaitForFirstConsumer"
+
+# Monitoring Configuration
+monitoring_enabled: false
+prometheus_namespace: "monitoring"
+
+# Security Configuration
+rbac_enabled: true
+pod_security_policy_enabled: false
+network_policy_enabled: true
+
+# Upgrade Configuration
+upgrade_strategy: "rolling"
+upgrade_max_unavailable: 1
+
+# Maintenance Configuration
+maintenance_window: "02:00-04:00"
+maintenance_timezone: "Africa/Johannesburg"

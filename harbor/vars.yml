@@ -1,0 +1,139 @@
+# Harbor Container Registry Configuration
+
+# Harbor Version
+harbor_version: "2.10.0"
+harbor_download_url: "https://github.com/goharbor/harbor/releases/download/v{{ harbor_version }}/harbor-offline-installer-v{{ harbor_version }}.tgz"
+
+# Installation directories
+harbor_install_dir: "/opt/harbor"
+harbor_data_dir: "/data/harbor"
+harbor_config_dir: "/etc/harbor"
+harbor_certs_dir: "/etc/harbor/certs"
+harbor_backup_dir: "/backup/harbor"
+
+# Harbor Network Configuration
+harbor_hostname: "{{ ansible_default_ipv4.address }}"
+harbor_http_port: 80
+harbor_https_port: 443
+
+# SSL Configuration
+harbor_ssl_enabled: true
+harbor_ssl_verify: false
+harbor_ssl_cert_path: "{{ harbor_certs_dir }}/harbor.crt"
+harbor_ssl_key_path: "{{ harbor_certs_dir }}/harbor.key"
+harbor_ssl_ca_path: "{{ harbor_certs_dir }}/ca.crt"
+
+# Harbor URLs
+harbor_base_url: "{{ 'https' if harbor_ssl_enabled else 'http' }}://{{ harbor_hostname }}{% if harbor_ssl_enabled and harbor_https_port != 443 %}:{{ harbor_https_port }}{% elif not harbor_ssl_enabled and harbor_http_port != 80 %}:{{ harbor_http_port }}{% endif %}"
+
+# Database Configuration
+harbor_database_type: "postgresql"
+harbor_external_database: false  # Set to true if using external PostgreSQL
+harbor_db_host: "postgresql"
+harbor_db_port: 5432
+harbor_db_name: "registry"
+harbor_db_username: "harbor"
+# harbor_db_password: defined in vault.yml
+
+# Redis Configuration
+harbor_redis_host: "redis"
+harbor_redis_port: 6379
+harbor_redis_db_index: 1
+harbor_redis_db_index_reg: 2
+harbor_redis_db_index_chart: 3
+# harbor_redis_password: defined in vault.yml
+
+# Harbor Core Configuration
+harbor_core_secret: "{{ harbor_secret_key }}"
+harbor_jobservice_secret: "{{ harbor_secret_key }}"
+
+# Admin Configuration
+harbor_admin_username: "admin"
+harbor_default_admin_password: "Harbor12345"
+# harbor_admin_password: defined in vault.yml
+
+# Harbor Components
+harbor_components:
+  - "trivy"     # Vulnerability scanner (only supported component in v2.10.0)
+
+# Harbor Registry Configuration
+harbor_registry_storage_provider: "filesystem"
+harbor_registry_storage_redirect_disable: false
+
+# Harbor Log Configuration
+harbor_log_level: "info"
+harbor_log_local_rotation_count: 50
+harbor_log_local_rotation_size: "200M"
+
+# Harbor Email Configuration
+harbor_email_enabled: false
+harbor_email_host: "smtp.mydomain.com"
+harbor_email_port: 587
+harbor_email_username: "sample_admin@mydomain.com"
+# harbor_email_password: defined in vault.yml
+harbor_email_from: "admin <sample_admin@mydomain.com>"
+harbor_email_ssl: true
+harbor_email_insecure: false
+
+# Harbor LDAP Configuration (if using LDAP authentication)
+harbor_auth_mode: "db_auth"  # or "ldap_auth"
+harbor_ldap_url: "ldaps://ldap.mydomain.com"
+harbor_ldap_search_dn: "uid=searchuser,ou=people,dc=mydomain,dc=com"
+# harbor_ldap_search_password: defined in vault.yml
+harbor_ldap_base_dn: "ou=people,dc=mydomain,dc=com"
+harbor_ldap_filter: ""
+harbor_ldap_uid: "uid"
+harbor_ldap_scope: 2
+harbor_ldap_timeout: 5
+harbor_ldap_verify_cert: true
+
+# Harbor Token Configuration
+harbor_token_expiration: 30
+
+# Harbor Project Configuration
+harbor_project_creation_restriction: "everyone"  # or "adminonly"
+
+# Harbor Self Registration
+harbor_self_registration: true
+
+# Harbor Garbage Collection
+harbor_garbage_collection_enabled: true
+
+# Docker and Docker Compose Configuration
+docker_version: "24.0"
+docker_compose_version: "2.21.0"
+
+# System Configuration
+harbor_configure_firewall: true
+
+# Harbor Performance Tuning
+harbor_core_workers: 10
+harbor_jobservice_workers: 10
+
+# Harbor Storage Configuration
+harbor_storage_quota_default: "1TB"
+
+# Harbor Replication (for multi-site deployments)
+harbor_replication_enabled: false
+
+# Harbor Webhook Configuration
+harbor_webhook_enabled: true
+
+# Harbor Metrics
+harbor_metrics_enabled: true
+harbor_metrics_port: 8001
+
+# Default Harbor Projects
+harbor_projects:
+  - name: "library"
+    public: true
+    auto_scan: true
+    severity: "low"
+  - name: "internal"
+    public: false
+    auto_scan: true
+    severity: "medium"
+  - name: "production"
+    public: false
+    auto_scan: true
+    severity: "high"

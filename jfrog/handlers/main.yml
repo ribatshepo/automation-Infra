@@ -1,0 +1,19 @@
+---
+- name: update-ca-certificates
+  command: update-ca-certificates
+
+- name: restart artifactory
+  systemd:
+    name: artifactory
+    state: restarted
+    daemon_reload: yes
+
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: start artifactory
+  systemd:
+    name: artifactory
+    state: started
+    enabled: yes

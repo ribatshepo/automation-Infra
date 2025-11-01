@@ -1,0 +1,79 @@
+---
+- name: Join Additional Master Nodes to Kubernetes Cluster
+  hosts: k8s_masters[1:]
+  become: yes
+  vars_files:
+    - ../vars.yml
+    - ../vault.yml
+
+  tasks:
+    - name: Check if node is already part of cluster
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: node_joined
+
+    - name: Read master join command from first master
+      slurp:
+        src: /tmp/join-command-masters
+      register: join_command_file
+      delegate_to: "{{ groups['k8s_masters'][0] }}"
+      when: not node_joined.stat.exists
+
+    - name: Set join command fact
+      set_fact:
+        master_join_command: "{{ join_command_file.content | b64decode | trim }}"
+      when: not node_joined.stat.exists
+
+    - name: Join master node to cluster
+      shell: "{{ master_join_command }}"
+      register: join_result
+      when: not node_joined.stat.exists
+      tags:
+        - master
+        - join
+
+    - name: Create .kube directory for root
+      file:
+        path: /root/.kube
+        state: directory
+        mode: '0755'
+      tags:
+        - master
+        - config
+
+    - name: Copy admin.conf to .kube/config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: yes
+        owner: root
+        mode: '0600'
+      tags:
+        - master
+        - config
+
+    - name: Verify master node status
+      shell: kubectl get nodes {{ inventory_hostname }}
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: node_status
+      retries: 5
+      delay: 10
+      until: "'Ready' in node_status.stdout"
+      tags:
+        - master
+        - verify
+
+    - name: Display master join status
+      debug:
+        msg: |
+          Master Node Join Complete:
+          =========================
+          - Node: {{ inventory_hostname }}
+          - Status: {{ 'Joined' if not node_joined.stat.exists else 'Already joined' }}
+          - Cluster Role: Control Plane
+          
+          Node Status: {{ node_status.stdout if node_status is defined else 'Check manually' }}
+      tags:
+        - master
+        - info

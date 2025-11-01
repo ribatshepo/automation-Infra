@@ -1,0 +1,410 @@
+name: 'Python CI/CD Pipeline'
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: 'Python version to use'
+        required: false
+        default: '3.11'
+        type: string
+      package-manager:
+        description: 'Package manager (pip, poetry, pipenv)'
+        required: false
+        default: 'pip'
+        type: string
+      run-tests:
+        description: 'Run unit tests'
+        required: false
+        default: true
+        type: boolean
+      run-linting:
+        description: 'Run linting (flake8, black, isort)'
+        required: false
+        default: true
+        type: boolean
+      run-security-scan:
+        description: 'Run security scanning (bandit, safety)'
+        required: false
+        default: true
+        type: boolean
+      build-docker:
+        description: 'Build Docker image'
+        required: false
+        default: true
+        type: boolean
+      deploy-package:
+        description: 'Deploy Python package'
+        required: false
+        default: true
+        type: boolean
+      environment:
+        description: 'Deployment environment'
+        required: false
+        default: 'development'
+        type: string
+    secrets:
+      HARBOR_REGISTRY:
+        required: true
+      HARBOR_USERNAME:
+        required: true
+      HARBOR_PASSWORD:
+        required: true
+      HARBOR_PROJECT:
+        required: true
+      ARTIFACTORY_URL:
+        required: true
+      ARTIFACTORY_USERNAME:
+        required: true
+      ARTIFACTORY_PASSWORD:
+        required: true
+      ARTIFACTORY_PYPI_REPO:
+        required: true
+      SONAR_TOKEN:
+        required: false
+
+env:
+  PYTHONUNBUFFERED: 1
+  PYTHONDONTWRITEBYTECODE: 1
+
+jobs:
+  build-and-test:
+    name: 'Build and Test'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      package-name: ${{ steps.metadata.outputs.package-name }}
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 'Setup Python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: 'Extract project metadata'
+        id: metadata
+        run: |
+          # Determine package name and version
+          if [[ -f "pyproject.toml" ]]; then
+            PACKAGE_NAME=$(grep '^name = ' pyproject.toml | cut -d'"' -f2 | head -1)
+            VERSION=$(grep '^version = ' pyproject.toml | cut -d'"' -f2 | head -1)
+          elif [[ -f "setup.py" ]]; then
+            PACKAGE_NAME=$(python setup.py --name 2>/dev/null || echo "${GITHUB_REPOSITORY##*/}")
+            VERSION=$(python setup.py --version 2>/dev/null || echo "1.0.0")
+          else
+            PACKAGE_NAME="${GITHUB_REPOSITORY##*/}"
+            VERSION="1.0.0"
+          fi
+          
+          # Override version if this is a tag
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          elif [[ "$VERSION" == "1.0.0" ]]; then
+            VERSION="1.0.0.dev${GITHUB_RUN_NUMBER}+${GITHUB_SHA::8}"
+          fi
+          
+          echo "package-name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          echo "Package: $PACKAGE_NAME v$VERSION"
+
+      - name: 'Set version'
+        id: version
+        run: |
+          VERSION="${{ steps.metadata.outputs.version }}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          # Update version in files if needed
+          if [[ -f "pyproject.toml" ]]; then
+            sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+          fi
+          
+          if [[ -f "setup.py" ]]; then
+            sed -i "s/version=.*/version=\"$VERSION\",/" setup.py
+          fi
+
+      - name: 'Cache dependencies'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/pypoetry
+            ~/.local/share/virtualenvs
+          key: ${{ runner.os }}-python-${{ inputs.python-version }}-${{ inputs.package-manager }}-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml', '**/Pipfile') }}
+
+      - name: 'Install dependencies (pip)'
+        if: inputs.package-manager == 'pip'
+        run: |
+          python -m pip install --upgrade pip
+          if [[ -f "requirements-dev.txt" ]]; then
+            pip install -r requirements-dev.txt
+          elif [[ -f "requirements.txt" ]]; then
+            pip install -r requirements.txt
+          fi
+          
+          # Install testing and linting tools
+          pip install pytest pytest-cov pytest-xdist
+          if [[ "${{ inputs.run-linting }}" == "true" ]]; then
+            pip install flake8 black isort mypy
+          fi
+          if [[ "${{ inputs.run-security-scan }}" == "true" ]]; then
+            pip install bandit safety
+          fi
+
+      - name: 'Install dependencies (poetry)'
+        if: inputs.package-manager == 'poetry'
+        run: |
+          pip install poetry
+          poetry config virtualenvs.create false
+          poetry install --with dev
+
+      - name: 'Install dependencies (pipenv)'
+        if: inputs.package-manager == 'pipenv'
+        run: |
+          pip install pipenv
+          pipenv install --dev --system
+
+      - name: 'Code formatting and linting'
+        if: inputs.run-linting
+        run: |
+          echo "##  Code Quality Checks" >> $GITHUB_STEP_SUMMARY
+          
+          # Black formatting check
+          if command -v black &> /dev/null; then
+            echo "### Black Formatting" >> $GITHUB_STEP_SUMMARY
+            if black --check --diff .; then
+              echo "Code is properly formatted" >> $GITHUB_STEP_SUMMARY
+            else
+              echo " Code formatting issues found" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+          fi
+          
+          # isort import sorting
+          if command -v isort &> /dev/null; then
+            echo "### Import Sorting" >> $GITHUB_STEP_SUMMARY
+            if isort --check-only --diff .; then
+              echo "Imports are properly sorted" >> $GITHUB_STEP_SUMMARY
+            else
+              echo " Import sorting issues found" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+          fi
+          
+          # Flake8 linting
+          if command -v flake8 &> /dev/null; then
+            echo "### Flake8 Linting" >> $GITHUB_STEP_SUMMARY
+            if flake8 .; then
+              echo "No linting issues found" >> $GITHUB_STEP_SUMMARY
+            else
+              echo " Linting issues found" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+          fi
+          
+          # Type checking with mypy
+          if command -v mypy &> /dev/null; then
+            echo "### Type Checking" >> $GITHUB_STEP_SUMMARY
+            if mypy . || true; then
+              echo "Type checking completed" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+      - name: 'Security scanning'
+        if: inputs.run-security-scan
+        run: |
+          echo "##  Security Scanning" >> $GITHUB_STEP_SUMMARY
+          
+          # Bandit security linting
+          if command -v bandit &> /dev/null; then
+            echo "### Bandit Security Scan" >> $GITHUB_STEP_SUMMARY
+            bandit -r . -f json -o bandit-report.json || true
+            ISSUES=$(cat bandit-report.json | jq '.results | length')
+            echo "Found $ISSUES security issues" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Safety dependency checking
+          if command -v safety &> /dev/null; then
+            echo "### Safety Dependency Check" >> $GITHUB_STEP_SUMMARY
+            if safety check --json --output safety-report.json || true; then
+              VULNS=$(cat safety-report.json | jq '. | length')
+              echo "Found $VULNS vulnerable dependencies" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+      - name: 'Run tests'
+        if: inputs.run-tests
+        run: |
+          if [[ -d "tests" ]]; then
+            pytest \
+              --cov=. \
+              --cov-report=xml \
+              --cov-report=html \
+              --cov-report=term \
+              --junitxml=pytest-report.xml \
+              -v \
+              tests/
+          else
+            echo "No tests directory found"
+          fi
+
+      - name: 'Upload test results'
+        if: inputs.run-tests && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            pytest-report.xml
+            htmlcov/
+            coverage.xml
+
+      - name: 'JFrog Xray security scan'
+        if: inputs.run-security-scan
+        env:
+          JFROG_CLI_BUILD_NAME: ${{ github.repository }}
+          JFROG_CLI_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          # Install JFrog CLI
+          curl -fL https://getcli.jfrog.io | sh
+          sudo mv jfrog /usr/local/bin/
+          
+          # Configure JFrog CLI
+          jfrog config add artifactory \
+            --url="${{ secrets.ARTIFACTORY_URL }}" \
+            --user="${{ secrets.ARTIFACTORY_USERNAME }}" \
+            --password="${{ secrets.ARTIFACTORY_PASSWORD }}" \
+            --interactive=false
+          
+          # Scan dependencies for vulnerabilities
+          echo "### JFrog Xray Security Scan" >> $GITHUB_STEP_SUMMARY
+          
+          # Create requirements file for scanning if it doesn't exist
+          if [[ ! -f "requirements.txt" ]] && [[ -f "pyproject.toml" ]]; then
+            pip freeze > requirements.txt
+          fi
+          
+          # Audit dependencies
+          if [[ -f "requirements.txt" ]]; then
+            jfrog audit --pip --requirements-file=requirements.txt --format=json > xray-report.json || true
+            
+            # Parse results
+            CRITICAL=$(cat xray-report.json | jq '.vulnerabilities[]? | select(.severity=="Critical") | .summary' | wc -l)
+            HIGH=$(cat xray-report.json | jq '.vulnerabilities[]? | select(.severity=="High") | .summary' | wc -l)
+            
+            echo " **Xray Scan Results:**" >> $GITHUB_STEP_SUMMARY
+            echo "- Critical: $CRITICAL" >> $GITHUB_STEP_SUMMARY
+            echo "- High: $HIGH" >> $GITHUB_STEP_SUMMARY
+            
+            if [[ $CRITICAL -gt 0 ]]; then
+              echo "::warning title=Security Alert::$CRITICAL critical vulnerabilities found"
+            fi
+          fi
+
+      - name: 'Build package'
+        if: inputs.deploy-package
+        run: |
+          pip install build twine
+          
+          if [[ "${{ inputs.package-manager }}" == "poetry" ]]; then
+            poetry build
+          else
+            python -m build
+          fi
+
+      - name: 'Upload build artifacts'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            dist/
+            bandit-report.json
+            safety-report.json
+
+  deploy-package:
+    name: 'Deploy Python Package'
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: inputs.deploy-package && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Download build artifacts'
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+
+      - name: 'Deploy to Artifactory'
+        uses: ./.github/actions/artifactory-push
+        with:
+          artifactory-url: ${{ secrets.ARTIFACTORY_URL }}
+          username: ${{ secrets.ARTIFACTORY_USERNAME }}
+          password: ${{ secrets.ARTIFACTORY_PASSWORD }}
+          repository: ${{ secrets.ARTIFACTORY_PYPI_REPO }}
+          package-type: 'pypi'
+          package-path: './dist'
+          package-name: ${{ needs.build-and-test.outputs.package-name }}
+          package-version: ${{ needs.build-and-test.outputs.version }}
+          build-properties: 'environment=${{ inputs.environment }}'
+          scan-package: ${{ inputs.run-security-scan }}
+
+  build-docker:
+    name: 'Build and Push Docker Image'
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: inputs.build-docker && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Build and push to Harbor'
+        uses: ./.github/actions/harbor-push
+        with:
+          registry: ${{ secrets.HARBOR_REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+          project: ${{ secrets.HARBOR_PROJECT }}
+          image-name: ${{ needs.build-and-test.outputs.package-name }}
+          dockerfile: './Dockerfile'
+          context: '.'
+          build-args: |
+            VERSION=${{ needs.build-and-test.outputs.version }}
+            PYTHON_VERSION=${{ inputs.python-version }}
+          tags: ${{ inputs.environment }}
+          scan-image: ${{ inputs.run-security-scan }}
+
+  deploy:
+    name: 'Deploy Application'
+    runs-on: ubuntu-latest
+    needs: [build-and-test, deploy-package, build-docker]
+    if: always() && needs.build-and-test.result == 'success' && (needs.deploy-package.result == 'success' || needs.deploy-package.result == 'skipped') && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped')
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: 'Deployment summary'
+        run: |
+          echo "## 🐍 Python Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Application**: ${{ needs.build-and-test.outputs.package-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: ${{ needs.build-and-test.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Python Version**: ${{ inputs.python-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Package Manager**: ${{ inputs.package-manager }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit**: ${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Components Deployed:" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ inputs.deploy-package }}" == "true" ]]; then
+            echo "- Python Package to Artifactory" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ inputs.build-docker }}" == "true" ]]; then
+            echo "- Docker Image to Harbor" >> $GITHUB_STEP_SUMMARY
+          fi

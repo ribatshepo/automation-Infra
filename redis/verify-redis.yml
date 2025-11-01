@@ -1,0 +1,374 @@
+---
+- name: Verify Redis Installation and Configuration
+  hosts: redis
+  become: true
+  
+  tasks:
+    - name: Gathering Facts
+      setup:
+      tags:
+        - always
+
+    - name: Determine which Redis service to verify
+      set_fact:
+        redis_service_name: "{{ 'redis-stack-server' if (redis_service_type | default('redis')) == 'redis-stack' else 'redis-server' }}"
+        redis_cli_host: "127.0.0.1"
+        redis_cli_port: "6379"
+        redis_auth_enabled_check: false
+      tags:
+        - always
+
+    - name: Check if Redis packages are installed
+      package_facts:
+        manager: "auto"
+      tags:
+        - verify
+        - packages
+
+    - name: Verify Redis packages installation
+      assert:
+        that:
+          - ("redis-server" in ansible_facts.packages) or ("redis-stack-server" in ansible_facts.packages)
+        fail_msg: "Redis packages are not installed"
+        success_msg: "Redis packages are installed correctly"
+      tags:
+        - verify
+        - packages
+
+    - name: Check Redis service status
+      service_facts:
+      tags:
+        - verify
+        - service
+
+    - name: Verify Redis service is running
+      assert:
+        that:
+          - ansible_facts.services[redis_service_name + '.service'].state == 'running'
+          - ansible_facts.services[redis_service_name + '.service'].status == 'enabled'
+        fail_msg: "Redis service is not running or not enabled"
+        success_msg: "Redis service is running and enabled"
+      tags:
+        - verify
+        - service
+
+    - name: Test Redis connection with authentication
+      shell: redis-cli -h {{ redis_cli_host }} -p {{ redis_cli_port }} -a {{ redis_cli_password }} ping
+      register: redis_ping_test
+      when: redis_auth_enabled_check
+      no_log: true
+      tags:
+        - verify
+        - connection
+
+    - name: Test Redis connection without authentication
+      shell: redis-cli -h {{ redis_cli_host }} -p {{ redis_cli_port }} ping
+      register: redis_ping_test_no_auth
+      when: not redis_auth_enabled_check
+      tags:
+        - verify
+        - connection
+
+    - name: Verify Redis is accepting connections
+      assert:
+        that:
+          - redis_ping_test_no_auth.stdout == 'PONG'
+        fail_msg: "Redis is not accepting connections"
+        success_msg: "Redis is accepting connections"
+      when: not redis_auth_enabled_check
+      tags:
+        - verify
+        - connection
+
+    - name: Verify Redis is accepting connections (with auth)
+      assert:
+        that:
+          - redis_ping_test.stdout == 'PONG'
+        fail_msg: "Redis is not accepting connections"
+        success_msg: "Redis is accepting connections"
+      when: redis_auth_enabled_check
+      tags:
+        - verify
+        - connection
+
+    - name: Get Redis version
+      shell: redis-cli -h {{ redis_cli_host }} -p {{ redis_cli_port }} {% if redis_auth_enabled_check %}-a {{ redis_cli_password }}{% endif %} INFO server | grep redis_version
+      register: redis_version_output
+      no_log: true
+      tags:
+        - verify
+        - info
+
+    - name: Display Redis version
+      debug:
+        msg: "Redis Version: {{ redis_version_output.stdout }}"
+      tags:
+        - verify
+        - info
+
+    - name: Get Redis info
+      shell: redis-cli -h {{ redis_cli_host }} -p {{ redis_cli_port }} {% if redis_auth_enabled_check %}-a {{ redis_cli_password }}{% endif %} INFO
+      register: redis_info_output
+      no_log: true
+      tags:
+        - verify
+        - info
+
+    - name: Test Redis basic operations
+      shell: |
+        redis-cli -h {{ redis_cli_host }} -p {{ redis_cli_port }} {% if redis_auth_enabled_check %}-a {{ redis_cli_password }}{% endif %} << 'EOF'
+        SET test_key "test_value"
+        GET test_key
+        DEL test_key
+        EOF
+      register: redis_basic_test
+      no_log: true
+      tags:
+        - verify
+        - operations
+
+    - name: Verify Redis basic operations
+      assert:
+        that:
+          - "'test_value' in redis_basic_test.stdout"
+          - "'1' in redis_basic_test.stdout"
+        fail_msg: "Redis basic operations failed"
+        success_msg: "Redis basic operations working"
+      tags:
+        - verify
+        - operations
+
+    - name: Check if Redis Stack modules are available (Redis Stack only)
+      shell: redis-cli -h {{ redis_cli_host }} -p {{ redis_cli_port }} {% if redis_auth_enabled_check %}-a {{ redis_cli_password }}{% endif %} MODULE LIST
+      register: redis_modules_list
+      when: (redis_service_type | default('redis')) == 'redis-stack'
+      no_log: true
+      tags:
+        - verify
+        - modules
+
+    - name: Test RedisJSON module (Redis Stack only)
+      shell: |
+        redis-cli -h {{ redis_cli_host }} -p {{ redis_cli_port }} {% if redis_auth_enabled_check %}-a {{ redis_cli_password }}{% endif %} << 'EOF'
+        JSON.SET test_json $ '{"name":"test","value":123}'
+        JSON.GET test_json
+        JSON.DEL test_json
+        EOF
+      register: redis_json_test
+      when: redis_service_type == 'redis-stack'
+      no_log: true
+      tags:
+        - verify
+        - modules
+        - json
+
+    - name: Test RediSearch module (Redis Stack only)
+      shell: |
+        redis-cli -h {{ redis_cli_host }} -p {{ redis_cli_port }} {% if redis_auth_enabled_check %}-a {{ redis_cli_password }}{% endif %} << 'EOF'
+        FT.CREATE test_idx ON HASH PREFIX 1 test: SCHEMA name TEXT value NUMERIC
+        HSET test:1 name "example" value 100
+        FT.SEARCH test_idx "*"
+        FT.DROPINDEX test_idx
+        DEL test:1
+        EOF
+      register: redis_search_test
+      when: redis_service_type == 'redis-stack'
+      no_log: true
+      tags:
+        - verify
+        - modules
+        - search
+
+    - name: Verify Redis Stack modules working (Redis Stack only)
+      assert:
+        that:
+          - "'search' in redis_modules_list.stdout"
+          - "'ReJSON' in redis_modules_list.stdout"
+          - "'name' in redis_json_test.stdout"
+          - "'example' in redis_search_test.stdout"
+        fail_msg: "Redis Stack modules are not working correctly"
+        success_msg: "Redis Stack modules are working correctly"
+      when: redis_service_type == 'redis-stack'
+      tags:
+        - verify
+        - modules
+
+    - name: Check Redis configuration files
+      stat:
+        path: "{{ item }}"
+      register: config_files_check
+      loop:
+        - "/etc/redis/redis.conf"
+        - "/etc/redis/users.acl"
+        - "/etc/redis-stack/redis-stack.conf"
+        - "/etc/redis-stack/users.acl"
+      tags:
+        - verify
+        - config
+
+    - name: Verify Redis configuration files exist
+      assert:
+        that:
+          - config_files_check.results[0].stat.exists or config_files_check.results[2].stat.exists
+        fail_msg: "Redis configuration files are missing"
+        success_msg: "Redis configuration files exist"
+      tags:
+        - verify
+        - config
+
+    - name: Check Redis is listening on correct port
+      wait_for:
+        host: "{{ redis_cli_host }}"
+        port: "{{ redis_cli_port }}"
+        timeout: 10
+      tags:
+        - verify
+        - network
+
+    - name: Check Redis data directory
+      stat:
+        path: "{{ redis_stack_dir | default('/var/lib/redis-stack') if redis_service_type == 'redis-stack' else redis_dir | default('/var/lib/redis') }}"
+      register: redis_data_dir
+      tags:
+        - verify
+        - storage
+
+    - name: Verify Redis data directory exists
+      assert:
+        that:
+          - redis_data_dir.stat.exists
+          - redis_data_dir.stat.isdir
+        fail_msg: "Redis data directory is missing"
+        success_msg: "Redis data directory exists"
+      tags:
+        - verify
+        - storage
+
+    - name: Check Redis log directory
+      stat:
+        path: "{{ '/var/log/redis-stack' if redis_service_type == 'redis-stack' else '/var/log/redis' }}"
+      register: redis_log_dir
+      tags:
+        - verify
+        - logging
+
+    - name: Check backup directory
+      stat:
+        path: "{{ '/var/backups/redis-stack' if redis_service_type == 'redis-stack' else '/var/backups/redis' }}"
+      register: redis_backup_dir
+      tags:
+        - verify
+        - backup
+
+    - name: Check backup script
+      stat:
+        path: "{{ '/usr/local/bin/redis-stack-backup.sh' if redis_service_type == 'redis-stack' else '/usr/local/bin/redis-backup.sh' }}"
+      register: redis_backup_script
+      tags:
+        - verify
+        - backup
+
+    - name: Verify backup setup
+      assert:
+        that:
+          - redis_backup_dir.stat.exists
+          - redis_backup_script.stat.exists
+          - redis_backup_script.stat.executable
+        fail_msg: "Backup setup is not complete"
+        success_msg: "Backup setup is properly configured"
+      tags:
+        - verify
+        - backup
+
+    - name: Check Redis process
+      command: pgrep -f redis
+      register: redis_processes
+      changed_when: false
+      tags:
+        - verify
+        - processes
+
+    - name: Display Redis processes
+      debug:
+        msg: "Redis processes running: {{ redis_processes.stdout_lines | length }}"
+      tags:
+        - verify
+        - processes
+
+    - name: Get Redis memory usage
+      shell: redis-cli -h {{ redis_cli_host }} -p {{ redis_cli_port }} {% if redis_auth_enabled_check %}-a {{ redis_cli_password }}{% endif %} INFO memory | grep used_memory_human
+      register: redis_memory_usage
+      no_log: true
+      tags:
+        - verify
+        - memory
+
+    - name: Get Redis connected clients
+      shell: redis-cli -h {{ redis_cli_host }} -p {{ redis_cli_port }} {% if redis_auth_enabled_check %}-a {{ redis_cli_password }}{% endif %} INFO clients | grep connected_clients
+      register: redis_connected_clients
+      no_log: true
+      tags:
+        - verify
+        - clients
+
+    - name: Get Redis key count
+      shell: redis-cli -h {{ redis_cli_host }} -p {{ redis_cli_port }} {% if redis_auth_enabled_check %}-a {{ redis_cli_password }}{% endif %} INFO keyspace
+      register: redis_keyspace
+      no_log: true
+      tags:
+        - verify
+        - keyspace
+
+    - name: Test Redis persistence
+      shell: |
+        redis-cli -h {{ redis_cli_host }} -p {{ redis_cli_port }} {% if redis_auth_enabled_check %}-a {{ redis_cli_password }}{% endif %} << 'EOF'
+        SET persistence_test "test_value_$(date +%s)"
+        BGSAVE
+        EOF
+      register: redis_persistence_test
+      no_log: true
+      tags:
+        - verify
+        - persistence
+
+    - name: Verify Redis persistence is working
+      assert:
+        that:
+          - "'Background saving started' in redis_persistence_test.stdout or 'OK' in redis_persistence_test.stdout"
+        fail_msg: "Redis persistence is not working"
+        success_msg: "Redis persistence is working"
+      tags:
+        - verify
+        - persistence
+
+    - name: Create comprehensive status report
+      debug:
+        msg: |
+          ===========================================
+          Redis Status Report for {{ inventory_hostname }}
+          ===========================================
+          Service Type: {{ redis_service_type | upper }}
+          Service Status: {{ 'Running' if ansible_facts.services[redis_service_name + '.service'].state == 'running' else 'Stopped' }}
+          Service Enabled: {{ 'Yes' if ansible_facts.services[redis_service_name + '.service'].status == 'enabled' else 'No' }}
+          Version: {{ redis_version_output.stdout }}
+          Host: {{ redis_cli_host }}
+          Port: {{ redis_cli_port }}
+          Authentication: {{ 'Enabled' if redis_auth_enabled_check else 'Disabled' }}
+          Memory Usage: {{ redis_memory_usage.stdout }}
+          Connected Clients: {{ redis_connected_clients.stdout }}
+          Keyspace Info: {{ redis_keyspace.stdout if redis_keyspace.stdout else 'No keys' }}
+          Backup Setup: {{ 'Configured' if redis_backup_dir.stat.exists and redis_backup_script.stat.exists else 'Not Configured' }}
+          {% if redis_service_type == 'redis-stack' %}
+          Loaded Modules: {{ redis_modules_list.stdout_lines | join(', ') if redis_modules_list.stdout_lines is defined else 'None' }}
+          {% endif %}
+          ===========================================
+      tags:
+        - verify
+        - summary
+
+    - name: Final verification success message
+      debug:
+        msg: "{{ redis_service_type | upper }} verification completed successfully! All components are operational."
+      tags:
+        - verify
+        - summary

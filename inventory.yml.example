@@ -1,0 +1,66 @@
+---
+all:
+  children:
+    loadbalancers:
+      hosts:
+        haproxy-1:
+          ansible_host: 10.100.10.210
+    
+    databases:
+      hosts:
+        postgres-1:
+          ansible_host: 10.100.10.220
+    
+    cache:
+      hosts:
+        redis-1:
+          ansible_host: 10.100.10.223
+    
+    redis:
+      hosts:
+        redis-1:
+          ansible_host: 10.100.10.223
+    
+    storage:
+      hosts:
+        minio-1:
+          ansible_host: 10.100.10.226
+    
+    registries:
+      hosts:
+        harbor-1:
+          ansible_host: 10.100.10.216
+    
+    artifacts:
+      hosts:
+        nexus-1:
+          ansible_host: 10.100.10.215
+    
+    k8s_masters:
+      hosts:
+        master-1:
+          ansible_host: 10.100.10.230
+        master-2:
+          ansible_host: 10.100.10.231
+        master-3:
+          ansible_host: 10.100.10.232
+    
+    k8s_workers:
+      hosts:
+        worker-1:
+          ansible_host: 10.100.10.240
+        worker-2:
+          ansible_host: 10.100.10.241
+        worker-3:
+          ansible_host: 10.100.10.242
+        worker-4:
+          ansible_host: 10.100.10.243
+        worker-5:
+          ansible_host: 10.100.10.244
+        worker-6:
+          ansible_host: 10.100.10.245
+
+  vars:
+    ansible_user: ubuntu
+    ansible_ssh_private_key_file: ~/.ssh/id_rsa
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'

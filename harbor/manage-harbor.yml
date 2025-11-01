@@ -1,0 +1,109 @@
+---
+- name: Manage Harbor Container Registry Services
+  hosts: registries
+  become: yes
+  gather_facts: yes
+  vars_files:
+    - vars.yml
+    - vault.yml
+
+  tasks:
+    - name: Validate harbor_action variable
+      fail:
+        msg: "harbor_action must be one of: start, stop, restart, status"
+      when: harbor_action not in ['start', 'stop', 'restart', 'status']
+
+    - name: Start Harbor services
+      block:
+        - name: Start Harbor systemd service
+          systemd:
+            name: harbor
+            state: started
+            enabled: yes
+
+        - name: Wait for Harbor to be ready
+          uri:
+            url: "{{ harbor_base_url }}/api/v2.0/systeminfo"
+            method: GET
+            status_code: 200
+            timeout: 30
+            validate_certs: "{{ harbor_ssl_verify }}"
+          retries: 10
+          delay: 15
+
+        - name: Display Harbor start status
+          debug:
+            msg: "Harbor services started successfully"
+      when: harbor_action == 'start'
+
+    - name: Stop Harbor services
+      block:
+        - name: Stop Harbor systemd service
+          systemd:
+            name: harbor
+            state: stopped
+
+        - name: Display Harbor stop status
+          debug:
+            msg: "Harbor services stopped successfully"
+      when: harbor_action == 'stop'
+
+    - name: Restart Harbor services
+      block:
+        - name: Restart Harbor systemd service
+          systemd:
+            name: harbor
+            state: restarted
+
+        - name: Wait for Harbor to be ready after restart
+          uri:
+            url: "{{ harbor_base_url }}/api/v2.0/systeminfo"
+            method: GET
+            status_code: 200
+            timeout: 30
+            validate_certs: "{{ harbor_ssl_verify }}"
+          retries: 10
+          delay: 15
+
+        - name: Display Harbor restart status
+          debug:
+            msg: "Harbor services restarted successfully"
+      when: harbor_action == 'restart'
+
+    - name: Check Harbor status
+      block:
+        - name: Get Harbor service status
+          systemd:
+            name: harbor
+          register: harbor_service_status
+
+        - name: Check Harbor containers status
+          command: docker-compose ps
+          args:
+            chdir: "{{ harbor_install_dir }}/harbor"
+          register: harbor_containers_status
+          changed_when: false
+
+        - name: Check Harbor API accessibility
+          uri:
+            url: "{{ harbor_base_url }}/api/v2.0/systeminfo"
+            method: GET
+            status_code: 200
+            timeout: 10
+            validate_certs: "{{ harbor_ssl_verify }}"
+          register: harbor_api_status
+          failed_when: false
+
+        - name: Display Harbor status information
+          debug:
+            msg: |
+              Harbor Status Information:
+              =========================
+              Systemd Service: {{ harbor_service_status.status.ActiveState }}
+              Service Enabled: {{ harbor_service_status.status.UnitFileState }}
+              API Accessible: {{ 'Yes' if harbor_api_status.status == 200 else 'No' }}
+              Harbor URL: {{ harbor_base_url }}
+              
+              Container Status:
+              {{ harbor_containers_status.stdout }}
+      when: harbor_action == 'status'

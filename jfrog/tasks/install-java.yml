@@ -1,0 +1,37 @@
+---
+- name: Check if Java 17 is already installed
+  command: java -version
+  register: java_version_check
+  failed_when: false
+  changed_when: false
+
+- name: Display current Java version
+  debug:
+    msg: "Current Java version: {{ java_version_check.stderr_lines[0] if java_version_check.rc == 0 else 'Not installed' }}"
+
+- name: Install OpenJDK 17
+  package:
+    name: openjdk-17-jdk
+    state: present
+  when: java_version_check.rc != 0 or 'openjdk version "17' not in java_version_check.stderr
+
+- name: Set JAVA_HOME environment variable
+  lineinfile:
+    path: /etc/environment
+    line: 'JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"'
+    state: present
+
+- name: Update alternatives for Java
+  alternatives:
+    name: java
+    path: /usr/lib/jvm/java-17-openjdk-amd64/bin/java
+    link: /usr/bin/java
+
+- name: Verify Java installation
+  command: java -version
+  register: java_final_check
+  changed_when: false
+
+- name: Display final Java version
+  debug:
+    msg: "Java installed: {{ java_final_check.stderr_lines[0] }}"

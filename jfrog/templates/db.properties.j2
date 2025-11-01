@@ -1,0 +1,33 @@
+# Database Configuration for JFrog Artifactory
+type={{ artifactory_db_type }}
+
+{% if artifactory_db_type == 'postgresql' %}
+driver=org.postgresql.Driver
+url=jdbc:postgresql://{{ artifactory_db_host }}:{{ artifactory_db_port }}/{{ artifactory_db_name }}
+username={{ artifactory_db_user }}
+password={{ artifactory_db_password }}
+{% elif artifactory_db_type == 'mysql' %}
+driver=com.mysql.cj.jdbc.Driver
+url=jdbc:mysql://{{ artifactory_db_host }}:{{ artifactory_db_port }}/{{ artifactory_db_name }}?characterEncoding=UTF-8&elideSetAutoCommits=true&useSSL=false
+username={{ artifactory_db_user }}
+password={{ artifactory_db_password }}
+{% elif artifactory_db_type == 'oracle' %}
+driver=oracle.jdbc.OracleDriver
+url=jdbc:oracle:thin:@{{ artifactory_db_host }}:{{ artifactory_db_port }}:{{ artifactory_db_name }}
+username={{ artifactory_db_user }}
+password={{ artifactory_db_password }}
+{% else %}
+# Using embedded Derby database
+{% endif %}
+
+# Connection pool settings
+maxActive={{ artifactory_pool_max_active }}
+maxIdle={{ artifactory_pool_max_idle }}
+maxWait=10000
+minEvictableIdleTimeMillis=300000
+numTestsPerEvictionRun=3
+testOnBorrow=true
+testOnReturn=false
+testWhileIdle=true
+timeBetweenEvictionRunsMillis=30000
+validationQuery=SELECT 1

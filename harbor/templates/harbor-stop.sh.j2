@@ -1,0 +1,11 @@
+#!/bin/bash
+# Harbor Stop Script
+
+set -e
+
+cd {{ harbor_install_dir }}/harbor
+
+echo "Stopping Harbor services..."
+docker-compose down
+
+echo "Harbor services stopped"

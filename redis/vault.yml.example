@@ -1,0 +1,59 @@
+---
+# Redis Vault Configuration
+# This file should be encrypted using ansible-vault encrypt vault.yml
+# Copy this file to vault.yml and update the passwords before encrypting
+
+################################## PASSWORDS ##################################
+
+# Redis Authentication Passwords
+redis_app_password: "your_strong_app_password_here"
+redis_readonly_password: "your_strong_readonly_password_here"
+
+# Redis Stack Authentication Passwords
+redis_stack_app_password: "your_strong_stack_app_password_here"
+redis_stack_readonly_password: "your_strong_stack_readonly_password_here"
+redis_stack_dev_password: "your_strong_stack_dev_password_here"
+
+# Master password for replication (if using master-slave setup)
+# redis_masterauth: "your_strong_master_password_here"
+# redis_stack_masterauth: "your_strong_stack_master_password_here"
+
+# Example encrypted content (after running ansible-vault encrypt vault.yml):
+# $ANSIBLE_VAULT;1.1;AES256
+# 66663330306135643...
+
+################################## TLS CERTIFICATES #######################
+
+# TLS Certificate content (if using TLS)
+# redis_tls_cert_content: |
+#   -----BEGIN CERTIFICATE-----
+#   Your certificate content here
+#   -----END CERTIFICATE-----
+
+# redis_tls_key_content: |
+#   -----BEGIN PRIVATE KEY-----
+#   Your private key content here
+#   -----END PRIVATE KEY-----
+
+# redis_tls_ca_cert_content: |
+#   -----BEGIN CERTIFICATE-----
+#   Your CA certificate content here
+#   -----END CERTIFICATE-----
+
+################################## INSTRUCTIONS ############################
+
+# To encrypt this file:
+# 1. Copy this file to vault.yml
+# 2. Update all passwords with strong, unique values
+# 3. Run: ansible-vault encrypt vault.yml
+# 4. You will be prompted to create a vault password
+# 5. Store the vault password securely
+
+# To edit the encrypted file:
+# ansible-vault edit vault.yml
+
+# To view the encrypted file:
+# ansible-vault view vault.yml
+
+# To change the vault password:
+# ansible-vault rekey vault.yml

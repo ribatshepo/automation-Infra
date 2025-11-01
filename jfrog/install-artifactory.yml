@@ -1,0 +1,222 @@
+---
+- name: Install and Configure JFrog Artifactory
+  hosts: nexus-1
+  become: true
+  vars_files:
+    - vars.yml
+    - vault.yml
+
+  handlers:
+    - name: restart artifactory
+      systemd:
+        name: artifactory
+        state: restarted
+      listen: "restart artifactory"
+
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+      listen: "reload systemd"
+
+  tasks:
+    - name: Update package cache
+      package:
+        update_cache: yes
+
+    - name: Install required system packages
+      package:
+        name:
+          - curl
+          - wget
+          - unzip
+          - tar
+          - openssl
+          - ca-certificates
+          - net-tools
+          - lsof
+        state: present
+
+    - name: Install Java JDK 17
+      include_tasks: tasks/install-java.yml
+      tags:
+        - java
+
+    - name: Create Artifactory user and directories
+      include_tasks: tasks/create-artifactory-user.yml
+      tags:
+        - user
+
+    - name: Download and install Artifactory
+      include_tasks: tasks/install-artifactory.yml
+      tags:
+        - install
+
+    - name: Generate SSL certificates for Artifactory
+      include_tasks: tasks/generate-ssl-certs.yml
+      when: artifactory_ssl_enabled
+      tags:
+        - ssl
+
+    - name: Configure Artifactory
+      template:
+        src: system.yaml.j2
+        dest: "{{ artifactory_data_dir }}/etc/system.yaml"
+        owner: "{{ artifactory_user }}"
+        group: "{{ artifactory_group }}"
+        mode: '0644'
+      notify:
+        - restart artifactory
+      tags:
+        - config
+
+    - name: Configure Artifactory database
+      template:
+        src: db.properties.j2
+        dest: "{{ artifactory_data_dir }}/etc/db.properties"
+        owner: "{{ artifactory_user }}"
+        group: "{{ artifactory_group }}"
+        mode: '0600'
+      notify:
+        - restart artifactory
+      tags:
+        - config
+        - database
+
+    - name: Configure Artifactory JVM options
+      template:
+        src: artifactory.default.j2
+        dest: "/etc/opt/jfrog/artifactory/default"
+        owner: root
+        group: root
+        mode: '0644'
+      notify:
+        - restart artifactory
+      tags:
+        - config
+
+    - name: Create Artifactory systemd service
+      template:
+        src: artifactory.service.j2
+        dest: /etc/systemd/system/artifactory.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify:
+        - reload systemd
+        - restart artifactory
+      tags:
+        - service
+
+    - name: Configure file limits for Artifactory user
+      lineinfile:
+        path: /etc/security/limits.conf
+        line: "{{ item }}"
+        create: yes
+      loop:
+        - "{{ artifactory_user }} soft nofile {{ artifactory_max_open_files }}"
+        - "{{ artifactory_user }} hard nofile {{ artifactory_max_open_files }}"
+      tags:
+        - config
+
+    - name: Configure logrotate for Artifactory
+      template:
+        src: artifactory.logrotate.j2
+        dest: /etc/logrotate.d/artifactory
+        owner: root
+        group: root
+        mode: '0644'
+      tags:
+        - config
+
+    - name: Configure firewall for Artifactory
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        comment: "Artifactory {{ item }}"
+      loop:
+        - "{{ artifactory_port }}"
+        - "{{ artifactory_ssl_port }}"
+      tags:
+        - firewall
+
+    - name: Create Artifactory management scripts
+      template:
+        src: "{{ item }}.j2"
+        dest: "/usr/local/bin/{{ item }}"
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - artifactory-backup.sh
+        - artifactory-restore.sh
+        - artifactory-admin-password.sh
+      tags:
+        - scripts
+
+    - name: Configure SSL certificates
+      include_tasks: tasks/configure-ssl.yml
+      tags:
+        - ssl
+
+    - name: Verify database connectivity
+      include_tasks: tasks/verify-database.yml
+      tags:
+        - database
+        - verify
+
+    - name: Configure and start Artifactory
+      include_tasks: tasks/configure-artifactory.yml
+      tags:
+        - configure
+
+    - name: Start Artifactory service with proper sequencing
+      include_tasks: tasks/start-service.yml
+      tags:
+        - service
+
+    - name: Wait for service to be fully ready
+      include_tasks: tasks/wait-for-service.yml
+      tags:
+        - service
+        - verify
+
+    - name: Configure admin credentials automatically
+      include_tasks: tasks/configure-admin.yml
+      tags:
+        - admin
+        - security
+
+    - name: Run comprehensive health check
+      include_tasks: tasks/health-check.yml
+      tags:
+        - verify
+        - health
+
+    - name: Wait for Artifactory to be ready
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ artifactory_port }}{{ artifactory_context_path }}/api/system/ping"
+        method: GET
+      register: artifactory_health
+      until: artifactory_health.status == 200
+      retries: 30
+      delay: 10
+      tags:
+        - verify
+
+    - name: Display Artifactory access information
+      debug:
+        msg: |
+          JFrog Artifactory is now running!
+          
+          Access URL: http://{{ ansible_default_ipv4.address }}:{{ artifactory_port }}{{ artifactory_context_path }}
+          {% if artifactory_ssl_enabled %}
+          HTTPS URL: https://{{ ansible_default_ipv4.address }}:{{ artifactory_ssl_port }}{{ artifactory_context_path }}
+          {% endif %}
+          
+          Default credentials:
+          Username: {{ artifactory_admin_username }}
+          Password: {{ artifactory_admin_password }}
+          
+          API Endpoint: http://{{ ansible_default_ipv4.address }}:{{ artifactory_port }}{{ artifactory_context_path }}/api
+      tags:
+        - info

@@ -1,0 +1,135 @@
+---
+- name: Verify Kubernetes Cluster Health and Functionality
+  hosts: k8s_masters[0]
+  become: yes
+  vars_files:
+    - ../vars.yml
+    - ../vault.yml
+
+  tasks:
+    - name: Check cluster info
+      shell: kubectl cluster-info
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: cluster_info
+      tags:
+        - verify
+        - cluster
+
+    - name: Get all nodes status
+      shell: kubectl get nodes -o wide
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: nodes_status
+      tags:
+        - verify
+        - nodes
+
+    - name: Check system pods status
+      shell: kubectl get pods -n kube-system
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: system_pods
+      tags:
+        - verify
+        - pods
+
+    - name: Verify all nodes are Ready
+      shell: kubectl get nodes --no-headers | awk '{print $2}' | grep -v Ready
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: not_ready_nodes
+      failed_when: not_ready_nodes.stdout != ""
+      tags:
+        - verify
+        - health
+
+    - name: Verify all system pods are Running
+      shell: |
+        kubectl get pods -n kube-system --no-headers | awk '{print $3}' | grep -v -E '^(Running|Completed)$'
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: not_running_pods
+      failed_when: not_running_pods.stdout != ""
+      tags:
+        - verify
+        - health
+
+    - name: Test DNS resolution
+      shell: |
+        kubectl run test-dns --image=busybox --rm -it --restart=Never -- nslookup kubernetes.default
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: dns_test
+      tags:
+        - verify
+        - dns
+
+    - name: Create test deployment
+      shell: |
+        kubectl create deployment test-nginx --image=nginx:latest --replicas=3
+        kubectl expose deployment test-nginx --port=80 --type=ClusterIP
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: test_deployment
+      tags:
+        - verify
+        - test
+
+    - name: Wait for test deployment to be ready
+      shell: kubectl wait --for=condition=available --timeout=300s deployment/test-nginx
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      tags:
+        - verify
+        - test
+
+    - name: Test service connectivity
+      shell: |
+        kubectl run test-client --image=busybox --rm -it --restart=Never -- wget -qO- test-nginx
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: service_test
+      tags:
+        - verify
+        - test
+
+    - name: Cleanup test resources
+      shell: |
+        kubectl delete deployment test-nginx
+        kubectl delete service test-nginx
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      tags:
+        - verify
+        - cleanup
+
+    - name: Display cluster verification summary
+      debug:
+        msg: |
+          Kubernetes Cluster Verification Summary:
+          ========================================
+          Cluster Name: {{ cluster_name }}
+          Total Nodes: {{ (kubernetes_masters | length) + (kubernetes_workers | length) }}
+          Master Nodes: {{ kubernetes_masters | length }}
+          Worker Nodes: {{ kubernetes_workers | length }}
+          
+          Cluster Info:
+          {{ cluster_info.stdout }}
+          
+          Node Status:
+          {{ nodes_status.stdout }}
+          
+          System Pods Status:
+          {{ system_pods.stdout }}
+          
+          Health Checks:
+          - All nodes Ready: {{ 'PASS' if not_ready_nodes.stdout == '' else 'FAIL' }}
+          - All pods Running: {{ 'PASS' if not_running_pods.stdout == '' else 'FAIL' }}
+          - DNS Resolution: {{ 'PASS' if 'kubernetes.default' in dns_test.stdout else 'FAIL' }}
+          - Service Connectivity: {{ 'PASS' if 'nginx' in service_test.stdout else 'FAIL' }}
+          
+          Kubernetes cluster is {{ 'HEALTHY' if (not_ready_nodes.stdout == '' and not_running_pods.stdout == '') else 'NEEDS ATTENTION' }}!
+      tags:
+        - verify
+        - summary

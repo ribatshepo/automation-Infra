@@ -1,0 +1,49 @@
+# Kubernetes Configuration Variables
+kubernetes_version: "1.29.0"
+kubernetes_api_endpoint: "k8s-api"
+kubernetes_pod_cidr: "10.244.0.0/16"
+kubernetes_service_cidr: "10.96.0.0/12"
+
+# Network Configuration
+flannel_version: "v0.24.2"
+calico_version: "v3.27.0"
+
+# Container Runtime
+container_runtime: "containerd"
+containerd_version: "1.7.13"
+
+# Load Balancer Configuration
+haproxy_bind_address: "10.100.10.210"
+haproxy_stats_port: "8404"
+haproxy_stats_user: "admin"
+
+# Security Settings
+enable_psp: false
+enable_rbac: true
+
+# Cluster Networking
+cluster_name: "kubernetes"
+cluster_domain: "cluster.local"
+
+# Add-ons Configuration
+enable_metrics_server: true
+enable_dashboard: true
+enable_ingress: true
+
+# Etcd Configuration
+etcd_data_dir: "/var/lib/etcd"
+
+# Certificate Configuration
+cert_validity_days: 365
+
+# Resource Limits
+max_pods_per_node: 110
+
+# Features Gates
+feature_gates: {}
+
+# Additional kubelet arguments
+kubelet_extra_args:
+  - "--cgroup-driver=systemd"
+  - "--container-runtime-endpoint=unix:///var/run/containerd/containerd.sock"
+  - "--pod-infra-container-image=registry.k8s.io/pause:3.9"

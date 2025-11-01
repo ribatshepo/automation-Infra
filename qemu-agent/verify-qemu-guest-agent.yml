@@ -1,0 +1,106 @@
+---
+- name: Verify QEMU Guest Agent Installation and Functionality
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  tasks:
+    - name: Check if qemu-guest-agent package is installed
+      package_facts:
+        manager: apt
+
+    - name: Check qemu-guest-agent service status
+      service_facts:
+      
+    - name: Debug service facts for qemu-guest-agent
+      debug:
+        var: ansible_facts.services['qemu-guest-agent.service']
+      when: ansible_facts.services['qemu-guest-agent.service'] is defined
+      
+    - name: Check systemd service status directly
+      systemd:
+        name: qemu-guest-agent
+      register: qemu_service_status
+      
+    - name: Debug systemd service status
+      debug:
+        var: qemu_service_status
+      
+    - name: Verify qemu-guest-agent service is running (primary check)
+      assert:
+        that:
+          - ansible_facts.services['qemu-guest-agent.service'].state == 'running'
+          - ansible_facts.services['qemu-guest-agent.service'].status == 'enabled'
+        fail_msg: "qemu-guest-agent service is not running or not enabled"
+        success_msg: "qemu-guest-agent service is running and enabled"
+      ignore_errors: yes
+      register: primary_service_check
+      
+    - name: Alternative service verification using systemctl
+      shell: |
+        systemctl is-active qemu-guest-agent && systemctl is-enabled qemu-guest-agent
+      register: systemctl_check
+      failed_when: false
+      changed_when: false
+      when: primary_service_check is failed
+      
+    - name: Final service status determination
+      assert:
+        that:
+          - primary_service_check is succeeded or systemctl_check.rc == 0
+        fail_msg: "qemu-guest-agent service verification failed with both service_facts and systemctl"
+        success_msg: "qemu-guest-agent service is verified as running and enabled"
+
+    - name: Check if qemu-guest-agent socket exists
+      stat:
+        path: /dev/virtio-ports/org.qemu.guest_agent.0
+      register: qemu_socket
+
+    - name: Verify virtio socket exists
+      debug:
+        msg: "QEMU Guest Agent socket status: {{ 'Found' if qemu_socket.stat.exists else 'Not Found' }}"
+
+    - name: Get qemu-guest-agent process information
+      command: pgrep -f qemu-ga
+      register: qemu_ga_pid
+      changed_when: false
+      failed_when: false
+
+    - name: Display qemu-guest-agent process status
+      debug:
+        msg: "QEMU Guest Agent PID: {{ qemu_ga_pid.stdout if qemu_ga_pid.rc == 0 else 'Not running' }}"
+
+    - name: Check systemd journal for qemu-guest-agent
+      command: journalctl -u qemu-guest-agent --no-pager -n 5
+      register: qemu_ga_logs
+      changed_when: false
+
+    - name: Display recent qemu-guest-agent logs
+      debug:
+        msg: "{{ qemu_ga_logs.stdout_lines }}"
+
+    - name: Test basic qemu-ga command execution
+      command: qemu-ga --version
+      register: qemu_ga_test
+      changed_when: false
+
+    - name: Show test results
+      debug:
+        msg: "QEMU Guest Agent version test: {{ qemu_ga_test.stdout }}"
+
+    - name: Create summary report
+      debug:
+        msg: |
+          ===========================================
+          QEMU Guest Agent Status for {{ inventory_hostname }}
+          ===========================================
+          Package Installed: {{ 'Yes' if 'qemu-guest-agent' in ansible_facts.packages else 'No' }}
+          Service Running: {{ 'Yes' if ansible_facts.services['qemu-guest-agent.service'].state == 'running' else 'No' }}
+          Service Enabled: {{ 'Yes' if ansible_facts.services['qemu-guest-agent.service'].status == 'enabled' else 'No' }}
+          Service Status (service_facts): {{ ansible_facts.services['qemu-guest-agent.service'].status | default('Unknown') }}
+          Service State (service_facts): {{ ansible_facts.services['qemu-guest-agent.service'].state | default('Unknown') }}
+          Systemd Status: {{ qemu_service_status.status.UnitFileState | default('Unknown') }}
+          Systemd Active State: {{ qemu_service_status.status.ActiveState | default('Unknown') }}
+          Virtio Socket: {{ 'Found' if qemu_socket.stat.exists else 'Not Found' }}
+          Process Running: {{ 'Yes' if qemu_ga_pid.rc == 0 else 'No' }}
+          ===========================================

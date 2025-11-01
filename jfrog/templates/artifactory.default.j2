@@ -1,0 +1,56 @@
+# JFrog Artifactory JVM Configuration
+
+# Java home
+export JAVA_HOME={{ java_home }}
+
+# JVM Memory settings
+export JAVA_OPTIONS="-server \
+    -Xms{{ artifactory_java_xms }} \
+    -Xmx{{ artifactory_java_xmx }} \
+    -Xss256k \
+    -XX:+UseG1GC \
+    -XX:+UseStringDeduplication \
+    -XX:+OptimizeStringConcat \
+    -XX:+UseCompressedOops \
+    -XX:ReservedCodeCacheSize=128m \
+    -XX:+PerfDisableSharedMem \
+    {{ artifactory_java_additional_opts }}"
+
+# System properties
+export JAVA_OPTIONS="$JAVA_OPTIONS \
+    -Djava.awt.headless=true \
+    -Djava.net.preferIPv4Stack=true \
+    -Djava.security.egd=file:/dev/./urandom \
+    -Dfile.encoding=UTF-8 \
+    -Duser.timezone=UTC \
+    -Djfrog.access.client.serverUrl.override=http://localhost:8082/access"
+
+# Artifactory specific settings
+export ARTIFACTORY_HOME={{ artifactory_install_dir }}
+export ARTIFACTORY_DATA={{ artifactory_data_dir }}
+export ARTIFACTORY_USER={{ artifactory_user }}
+export ARTIFACTORY_PID={{ artifactory_data_dir }}/run/artifactory.pid
+
+# Security settings
+export JAVA_OPTIONS="$JAVA_OPTIONS \
+    -Djfrog.security.joinKey={{ artifactory_access_token | default('default-key') }}"
+
+{% if artifactory_ssl_enabled %}
+# SSL settings
+export JAVA_OPTIONS="$JAVA_OPTIONS \
+    -Djavax.net.ssl.keyStore={{ artifactory_config_dir }}/ssl/keystore/artifactory.jks \
+    -Djavax.net.ssl.keyStorePassword={{ artifactory_keystore_password }} \
+    -Djavax.net.ssl.trustStore={{ artifactory_config_dir }}/ssl/keystore/artifactory.jks \
+    -Djavax.net.ssl.trustStorePassword={{ artifactory_keystore_password }}"
+{% endif %}
+
+# Performance tuning
+export JAVA_OPTIONS="$JAVA_OPTIONS \
+    -Dartifactory.async.corePoolSize=4 \
+    -Dartifactory.async.maxPoolSize=8 \
+    -Dartifactory.async.poolTtlSecs=60"
+
+# Logging configuration
+export JAVA_OPTIONS="$JAVA_OPTIONS \
+    -Dartifactory.logs.dir={{ artifactory_log_dir }} \
+    -Dlogback.configurationFile={{ artifactory_install_dir }}/app/misc/logback.xml"

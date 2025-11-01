@@ -1,0 +1,36 @@
+/var/log/minio/*.log {
+    daily
+    missingok
+    rotate {{ (minio_backup_retention_days / 7) | round | int }}
+    compress
+    delaycompress
+    notifempty
+    create 0644 {{ minio_user }} {{ minio_group }}
+    postrotate
+        systemctl reload minio || true
+    endscript
+}
+
+{{ minio_log_file }} {
+    daily
+    missingok
+    rotate 30
+    compress
+    delaycompress
+    notifempty
+    create 0644 {{ minio_user }} {{ minio_group }}
+    copytruncate
+}
+
+{% if minio_audit_log %}
+{{ minio_audit_log }} {
+    daily
+    missingok
+    rotate 90
+    compress
+    delaycompress
+    notifempty
+    create 0644 {{ minio_user }} {{ minio_group }}
+    copytruncate
+}
+{% endif %}

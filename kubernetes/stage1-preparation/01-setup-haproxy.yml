@@ -1,0 +1,140 @@
+---
+- name: Configure HAProxy for Kubernetes API Load Balancing
+  hosts: loadbalancers
+  become: yes
+  vars_files:
+    - ../vars.yml
+    - ../vault.yml
+
+  handlers:
+    - name: restart haproxy
+      systemd:
+        name: haproxy
+        state: restarted
+        daemon_reload: yes
+
+    - name: reload haproxy
+      systemd:
+        name: haproxy
+        state: reloaded
+
+  tasks:
+    - name: Update apt package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      tags:
+        - haproxy
+        - packages
+
+    - name: Install HAProxy and required packages
+      apt:
+        name:
+          - haproxy
+          - socat
+          - curl
+          - wget
+          - net-tools
+          - htop
+        state: present
+      tags:
+        - haproxy
+        - packages
+
+    - name: Backup original HAProxy configuration
+      copy:
+        src: /etc/haproxy/haproxy.cfg
+        dest: /etc/haproxy/haproxy.cfg.backup
+        remote_src: yes
+        backup: yes
+      when: not ansible_check_mode
+      tags:
+        - haproxy
+        - config
+
+    - name: Configure HAProxy for Kubernetes API servers
+      template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      notify: restart haproxy
+      tags:
+        - haproxy
+        - config
+
+    - name: Create HAProxy conf.d directory
+      file:
+        path: /etc/haproxy/conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      tags:
+        - haproxy
+        - config
+
+    - name: Enable HAProxy service
+      systemd:
+        name: haproxy
+        enabled: yes
+        state: started
+        daemon_reload: yes
+      tags:
+        - haproxy
+        - service
+
+    - name: Configure firewall for HAProxy
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        src: "{{ item.src }}"
+      loop:
+        - { port: "{{ haproxy_api_port }}", src: "10.100.10.0/24" }
+        - { port: "{{ haproxy_stats_port }}", src: "10.100.10.0/24" }
+        - { port: "80", src: "0.0.0.0/0" }
+        - { port: "443", src: "0.0.0.0/0" }
+      when: firewall_enabled
+      tags:
+        - haproxy
+        - firewall
+
+    - name: Verify HAProxy service is running
+      systemd:
+        name: haproxy
+        state: started
+      tags:
+        - haproxy
+        - health
+
+    - name: Test HAProxy stats page (optional)
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port }}/stats"
+        method: GET
+        status_code: 200
+      register: haproxy_stats_test
+      ignore_errors: yes
+      tags:
+        - haproxy
+        - test
+
+    - name: Display HAProxy status
+      debug:
+        msg: |
+          HAProxy for Kubernetes Configuration Complete:
+          =============================================
+          - Load Balancer IP: {{ ansible_default_ipv4.address }}
+          - Kubernetes API Port: {{ haproxy_api_port }}
+          - Stats URL: http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port }}/stats
+          - Backend Masters: {{ kubernetes_masters | length }}
+          - Service Status: {{ 'Running' if haproxy_stats_test.status == 200 else 'Check Required' }}
+          
+          Backend Servers:
+          {% for master in kubernetes_masters %}
+          - {{ master.name }}: {{ master.ip }}:{{ kubernetes_api_port }}
+          {% endfor %}
+      tags:
+        - haproxy
+        - info

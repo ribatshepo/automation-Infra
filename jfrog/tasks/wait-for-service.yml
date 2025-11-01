@@ -1,0 +1,51 @@
+---
+# Wait for JFrog Artifactory service to be fully ready
+- name: Wait for Artifactory service to start
+  wait_for:
+    port: 8081
+    host: localhost
+    timeout: 600
+    delay: 10
+  register: port_check
+
+- name: Wait for Artifactory UI to be accessible
+  uri:
+    url: "http://localhost:8081/ui/login"
+    method: GET
+    status_code: 200
+  register: ui_check
+  until: ui_check.status == 200
+  retries: 30
+  delay: 10
+  ignore_errors: yes
+
+- name: Wait for Artifactory API to be ready
+  uri:
+    url: "http://localhost:8081/artifactory/api/system/ping"
+    method: GET
+    status_code: 200
+  register: api_check
+  until: api_check.status == 200
+  retries: 30
+  delay: 10
+  ignore_errors: yes
+
+- name: Check if default credentials work
+  uri:
+    url: "http://localhost:8081/artifactory/api/system/ping"
+    method: GET
+    user: admin
+    password: password
+    force_basic_auth: yes
+    status_code: 200
+  register: default_creds_check
+  ignore_errors: yes
+
+- name: Display service readiness status
+  debug:
+    msg: |
+      Service Status:
+      - Port 8081: {{ 'Ready' if port_check is succeeded else 'Not Ready' }}
+      - UI Access: {{ 'Ready' if ui_check.status == 200 else 'Not Ready' }}
+      - API Access: {{ 'Ready' if api_check.status == 200 else 'Not Ready' }}
+      - Default Credentials: {{ 'Working' if default_creds_check is succeeded else 'Not Working' }}

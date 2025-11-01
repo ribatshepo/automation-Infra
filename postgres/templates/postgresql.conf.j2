@@ -1,0 +1,202 @@
+# PostgreSQL configuration file
+# This file is managed by Ansible - do not edit manually
+
+#------------------------------------------------------------------------------
+# FILE LOCATIONS
+#------------------------------------------------------------------------------
+
+data_directory = '/var/lib/postgresql/{{ postgresql_version }}/main'
+hba_file = '/etc/postgresql/{{ postgresql_version }}/main/pg_hba.conf'
+ident_file = '/etc/postgresql/{{ postgresql_version }}/main/pg_ident.conf'
+external_pid_file = '/var/run/postgresql/{{ postgresql_version }}-main.pid'
+
+#------------------------------------------------------------------------------
+# CONNECTIONS AND AUTHENTICATION
+#------------------------------------------------------------------------------
+
+listen_addresses = '{{ postgresql_listen_addresses }}'
+port = {{ postgresql_port }}
+max_connections = {{ postgresql_max_connections }}
+unix_socket_directories = '/var/run/postgresql'
+ssl = on
+ssl_cert_file = '/etc/ssl/certs/ssl-cert-snakeoil.pem'
+ssl_key_file = '/etc/ssl/private/ssl-cert-snakeoil.key'
+
+#------------------------------------------------------------------------------
+# RESOURCE USAGE (except WAL)
+#------------------------------------------------------------------------------
+
+shared_buffers = {{ postgresql_shared_buffers }}
+effective_cache_size = {{ postgresql_effective_cache_size }}
+maintenance_work_mem = {{ postgresql_maintenance_work_mem }}
+checkpoint_completion_target = {{ postgresql_checkpoint_completion_target }}
+wal_buffers = {{ postgresql_wal_buffers }}
+default_statistics_target = {{ postgresql_default_statistics_target }}
+random_page_cost = {{ postgresql_random_page_cost }}
+effective_io_concurrency = {{ postgresql_effective_io_concurrency }}
+
+#------------------------------------------------------------------------------
+# WRITE AHEAD LOG
+#------------------------------------------------------------------------------
+
+wal_level = replica
+archive_mode = on
+archive_command = 'test ! -f /var/lib/postgresql/{{ postgresql_version }}/main/archive/%f && cp %p /var/lib/postgresql/{{ postgresql_version }}/main/archive/%f'
+max_wal_senders = 3
+wal_keep_size = 1GB
+
+#------------------------------------------------------------------------------
+# REPLICATION
+#------------------------------------------------------------------------------
+
+synchronous_standby_names = ''
+vacuum_defer_cleanup_age = 0
+
+#------------------------------------------------------------------------------
+# QUERY TUNING
+#------------------------------------------------------------------------------
+
+enable_bitmapscan = on
+enable_hashjoin = on
+enable_indexscan = on
+enable_indexonlyscan = on
+enable_material = on
+enable_mergejoin = on
+enable_nestloop = on
+enable_seqscan = on
+enable_sort = on
+enable_tidscan = on
+
+#------------------------------------------------------------------------------
+# ERROR REPORTING AND LOGGING
+#------------------------------------------------------------------------------
+
+log_destination = 'stderr'
+logging_collector = on
+log_directory = 'log'
+log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+log_file_mode = 0600
+log_truncate_on_rotation = off
+log_rotation_age = 1d
+log_rotation_size = 100MB
+syslog_facility = 'LOCAL0'
+syslog_ident = 'postgres'
+client_min_messages = notice
+log_min_messages = warning
+log_min_error_statement = error
+log_min_duration_statement = 1000
+debug_print_parse = off
+debug_print_rewritten = off
+debug_print_plan = off
+debug_pretty_print = on
+log_checkpoints = on
+log_connections = on
+log_disconnections = on
+log_duration = off
+log_error_verbosity = default
+log_hostname = off
+log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+log_lock_waits = on
+log_statement = 'none'
+log_replication_commands = off
+log_temp_files = 10000
+log_timezone = 'UTC'
+
+#------------------------------------------------------------------------------
+# RUNTIME STATISTICS
+#------------------------------------------------------------------------------
+
+track_activities = on
+track_counts = on
+track_io_timing = on
+track_functions = none
+# stats_temp_directory deprecated in PostgreSQL 15
+# stats_temp_directory = '/var/run/postgresql/{{ postgresql_version }}-main.pg_stat_tmp'
+
+#------------------------------------------------------------------------------
+# AUTOVACUUM PARAMETERS
+#------------------------------------------------------------------------------
+
+autovacuum = on
+log_autovacuum_min_duration = 0
+autovacuum_max_workers = 3
+autovacuum_naptime = 1min
+autovacuum_vacuum_threshold = 50
+autovacuum_analyze_threshold = 50
+autovacuum_vacuum_scale_factor = 0.2
+autovacuum_analyze_scale_factor = 0.1
+autovacuum_freeze_max_age = 200000000
+autovacuum_multixact_freeze_max_age = 400000000
+autovacuum_vacuum_cost_delay = 20ms
+autovacuum_vacuum_cost_limit = -1
+
+#------------------------------------------------------------------------------
+# CLIENT CONNECTION DEFAULTS
+#------------------------------------------------------------------------------
+
+search_path = '"$user", public'
+default_tablespace = ''
+temp_tablespaces = ''
+check_function_bodies = on
+default_transaction_isolation = 'read committed'
+default_transaction_read_only = off
+default_transaction_deferrable = off
+session_replication_role = 'origin'
+statement_timeout = 0
+lock_timeout = 0
+idle_in_transaction_session_timeout = 0
+vacuum_freeze_min_age = 50000000
+vacuum_freeze_table_age = 150000000
+vacuum_multixact_freeze_min_age = 5000000
+vacuum_multixact_freeze_table_age = 150000000
+bytea_output = 'hex'
+xmlbinary = 'base64'
+xmloption = 'content'
+gin_fuzzy_search_limit = 0
+
+#------------------------------------------------------------------------------
+# LOCK MANAGEMENT
+#------------------------------------------------------------------------------
+
+deadlock_timeout = 1s
+max_locks_per_transaction = 64
+max_pred_locks_per_transaction = 64
+max_pred_locks_per_relation = -2
+max_pred_locks_per_page = 2
+
+#------------------------------------------------------------------------------
+# VERSION/PLATFORM COMPATIBILITY
+#------------------------------------------------------------------------------
+
+array_nulls = on
+backslash_quote = safe_encoding
+# default_with_oids deprecated in PostgreSQL 12 and removed in PostgreSQL 15
+# default_with_oids = off
+escape_string_warning = on
+lo_compat_privileges = off
+# operator_precedence_warning deprecated in PostgreSQL 15
+# operator_precedence_warning = off
+quote_all_identifiers = off
+# sql_inheritance deprecated in PostgreSQL 15
+# sql_inheritance = on
+standard_conforming_strings = on
+synchronize_seqscans = on
+
+#------------------------------------------------------------------------------
+# OTHER DEFAULTS
+#------------------------------------------------------------------------------
+
+dynamic_library_path = '$libdir'
+local_preload_libraries = ''
+session_preload_libraries = ''
+shared_preload_libraries = ''
+jit = on
+
+#------------------------------------------------------------------------------
+# CUSTOMIZED OPTIONS
+#------------------------------------------------------------------------------
+
+# Include additional configuration from conf.d directory
+include_dir = 'conf.d'
+
+# Custom settings can be added here or in conf.d/*.conf files

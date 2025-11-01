@@ -1,0 +1,105 @@
+---
+- name: Create SSL certificate directory
+  file:
+    path: "{{ artifactory_config_dir }}/ssl"
+    state: directory
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+    mode: '0755'
+
+- name: Generate private key for CA
+  openssl_privatekey:
+    path: "{{ artifactory_config_dir }}/ssl/ca.key"
+    size: 2048
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+    mode: '0600'
+
+- name: Generate CA certificate signing request
+  openssl_csr:
+    path: "{{ artifactory_config_dir }}/ssl/ca.csr"
+    privatekey_path: "{{ artifactory_config_dir }}/ssl/ca.key"
+    common_name: "Artifactory CA"
+    organization_name: "JFrog"
+    organizational_unit_name: "IT Department"
+    country_name: "US"
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+
+- name: Generate CA certificate
+  openssl_certificate:
+    path: "{{ artifactory_config_dir }}/ssl/ca.crt"
+    privatekey_path: "{{ artifactory_config_dir }}/ssl/ca.key"
+    csr_path: "{{ artifactory_config_dir }}/ssl/ca.csr"
+    provider: selfsigned
+    selfsigned_not_after: "+3650d"  # 10 years
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+
+- name: Generate private key for Artifactory
+  openssl_privatekey:
+    path: "{{ artifactory_ssl_key_path }}"
+    size: 2048
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+    mode: '0600'
+
+- name: Generate Artifactory certificate signing request
+  openssl_csr:
+    path: "{{ artifactory_config_dir }}/ssl/artifactory.csr"
+    privatekey_path: "{{ artifactory_ssl_key_path }}"
+    common_name: "{{ artifactory_hostname }}"
+    subject_alt_name:
+      - "DNS:{{ artifactory_hostname }}"
+      - "DNS:localhost"
+      - "IP:{{ ansible_default_ipv4.address }}"
+      - "IP:127.0.0.1"
+    organization_name: "JFrog"
+    organizational_unit_name: "Artifactory"
+    country_name: "US"
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+
+- name: Generate Artifactory certificate
+  openssl_certificate:
+    path: "{{ artifactory_ssl_cert_path }}"
+    privatekey_path: "{{ artifactory_ssl_key_path }}"
+    csr_path: "{{ artifactory_config_dir }}/ssl/artifactory.csr"
+    ownca_path: "{{ artifactory_config_dir }}/ssl/ca.crt"
+    ownca_privatekey_path: "{{ artifactory_config_dir }}/ssl/ca.key"
+    provider: ownca
+    ownca_not_after: "+365d"  # 1 year
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+
+- name: Add CA certificate to system trust store
+  copy:
+    src: "{{ artifactory_config_dir }}/ssl/ca.crt"
+    dest: /usr/local/share/ca-certificates/artifactory-ca.crt
+    remote_src: yes
+    owner: root
+    group: root
+    mode: '0644'
+  notify: update-ca-certificates
+
+- name: Update CA certificates
+  command: update-ca-certificates
+  changed_when: false
+
+- name: Create Java keystore directory
+  file:
+    path: "{{ artifactory_config_dir }}/ssl/keystore"
+    state: directory
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+    mode: '0755'
+
+- name: Display SSL certificate information
+  debug:
+    msg: |
+      SSL certificates generated successfully:
+      - CA Certificate: {{ artifactory_config_dir }}/ssl/ca.crt
+      - Server Certificate: {{ artifactory_ssl_cert_path }}
+      - Private Key: {{ artifactory_ssl_key_path }}
+      
+      Java keystore will be created during Artifactory startup if needed.

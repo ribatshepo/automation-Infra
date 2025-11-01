@@ -1,0 +1,31 @@
+---
+- name: Check if Docker Compose is already installed
+  command: docker-compose --version
+  register: docker_compose_check
+  failed_when: false
+  changed_when: false
+
+- name: Download Docker Compose
+  get_url:
+    url: "https://github.com/docker/compose/releases/download/v{{ docker_compose_version }}/docker-compose-{{ ansible_system }}-{{ ansible_architecture }}"
+    dest: /usr/local/bin/docker-compose
+    mode: '0755'
+    owner: root
+    group: root
+  when: docker_compose_check.rc != 0
+
+- name: Create docker-compose symlink
+  file:
+    src: /usr/local/bin/docker-compose
+    dest: /usr/bin/docker-compose
+    state: link
+  when: docker_compose_check.rc != 0
+
+- name: Verify Docker Compose installation
+  command: docker-compose --version
+  register: docker_compose_version_output
+  changed_when: false
+
+- name: Display Docker Compose version
+  debug:
+    msg: "Docker Compose installed: {{ docker_compose_version_output.stdout }}"

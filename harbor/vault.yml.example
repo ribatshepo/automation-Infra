@@ -1,0 +1,32 @@
+# Harbor Vault - Encrypted sensitive configuration
+# To edit this file: ansible-vault edit vault.yml
+
+# Harbor Database Password
+harbor_db_password: "HarborDB@2024!"
+
+# Harbor Redis Password  
+harbor_redis_password: "HarborRedis@2024!"
+
+# Harbor Admin Password
+harbor_admin_password: "HarborAdmin@2024!"
+
+# Harbor Secret Key (used for encryption)
+harbor_secret_key: "not-a-secret-anymore-change-this-please"
+
+# Harbor Email Password (if email notifications enabled)
+harbor_email_password: "email_password_here"
+
+# Harbor LDAP Search Password (if LDAP authentication enabled)
+harbor_ldap_search_password: "ldap_search_password_here"
+
+# SSL Certificate Details (for self-signed certificates)
+harbor_ssl_country: "ZA"
+harbor_ssl_state: "Gauteng"
+harbor_ssl_city: "Johannesburg"
+harbor_ssl_organization: "MyOrganization"
+harbor_ssl_organizational_unit: "IT Department"
+harbor_ssl_common_name: "{{ harbor_hostname }}"
+
+# Harbor Internal Tokens
+harbor_core_token: "harbor-core-token-change-me"
+harbor_jobservice_token: "harbor-jobservice-token-change-me"

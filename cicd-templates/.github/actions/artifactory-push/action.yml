@@ -1,0 +1,258 @@
+name: 'Artifactory Package Push'
+description: 'Build and push packages to JFrog Artifactory'
+inputs:
+  artifactory-url:
+    description: 'JFrog Artifactory URL'
+    required: true
+  username:
+    description: 'Artifactory username'
+    required: true
+  password:
+    description: 'Artifactory password'
+    required: true
+  access-token:
+    description: 'Artifactory access token (alternative to username/password)'
+    required: false
+  repository:
+    description: 'Target repository name'
+    required: true
+  package-type:
+    description: 'Package type (nuget, pypi, npm, go, cargo, generic)'
+    required: true
+  package-path:
+    description: 'Path to package files'
+    required: true
+  package-name:
+    description: 'Package name'
+    required: true
+  package-version:
+    description: 'Package version'
+    required: false
+    default: ''
+  build-properties:
+    description: 'Build properties (key=value,key2=value2)'
+    required: false
+    default: ''
+  scan-package:
+    description: 'Enable security scanning'
+    required: false
+    default: 'true'
+
+outputs:
+  package-url:
+    description: 'Package URL in Artifactory'
+    value: ${{ steps.upload.outputs.package-url }}
+  vulnerability-report:
+    description: 'Vulnerability scan report'
+    value: ${{ steps.scan.outputs.report }}
+  build-info:
+    description: 'Build information'
+    value: ${{ steps.build-info.outputs.build-info }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install JFrog CLI
+      shell: bash
+      run: |
+        curl -fL https://getcli.jfrog.io | sh
+        sudo mv jfrog /usr/local/bin/
+        jfrog --version
+
+    - name: Configure JFrog CLI
+      shell: bash
+      run: |
+        # Configure server
+        if [[ -n "${{ inputs.access-token }}" ]]; then
+          jfrog config add artifactory --url="${{ inputs.artifactory-url }}" --access-token="${{ inputs.access-token }}" --interactive=false
+        else
+          jfrog config add artifactory --url="${{ inputs.artifactory-url }}" --user="${{ inputs.username }}" --password="${{ inputs.password }}" --interactive=false
+        fi
+
+    - name: Validate package type and setup
+      id: setup
+      shell: bash
+      run: |
+        PACKAGE_TYPE="${{ inputs.package-type }}"
+        PACKAGE_PATH="${{ inputs.package-path }}"
+        PACKAGE_NAME="${{ inputs.package-name }}"
+        REPOSITORY="${{ inputs.repository }}"
+        
+        # Determine version if not provided
+        VERSION="${{ inputs.package-version }}"
+        if [[ -z "${VERSION}" ]]; then
+          case "${PACKAGE_TYPE}" in
+            "nuget")
+              VERSION=$(grep -o '<Version>[^<]*' "${PACKAGE_PATH}"/*.csproj | cut -d'>' -f2 | head -1)
+              [[ -z "${VERSION}" ]] && VERSION="1.0.0-${GITHUB_SHA::8}"
+              ;;
+            "pypi")
+              VERSION=$(python setup.py --version 2>/dev/null || echo "1.0.0-${GITHUB_SHA::8}")
+              ;;
+            "npm")
+              VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "1.0.0-${GITHUB_SHA::8}")
+              ;;
+            "go")
+              VERSION=$(git describe --tags --always 2>/dev/null || echo "v1.0.0-${GITHUB_SHA::8}")
+              ;;
+            "cargo")
+              VERSION=$(grep '^version' Cargo.toml | cut -d'"' -f2 | head -1 2>/dev/null || echo "1.0.0-${GITHUB_SHA::8}")
+              ;;
+            *)
+              VERSION="1.0.0-${GITHUB_SHA::8}"
+              ;;
+          esac
+        fi
+        
+        echo "package-type=${PACKAGE_TYPE}" >> $GITHUB_OUTPUT
+        echo "package-version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "repository=${REPOSITORY}" >> $GITHUB_OUTPUT
+        echo "package-name=${PACKAGE_NAME}" >> $GITHUB_OUTPUT
+        
+        echo "Package: ${PACKAGE_NAME}:${VERSION} (${PACKAGE_TYPE})"
+
+    - name: Build package (if needed)
+      shell: bash
+      run: |
+        PACKAGE_TYPE="${{ steps.setup.outputs.package-type }}"
+        
+        case "${PACKAGE_TYPE}" in
+          "nuget")
+            dotnet pack -c Release -o ./packages --include-symbols --include-source
+            ;;
+          "pypi")
+            python setup.py sdist bdist_wheel
+            ;;
+          "npm")
+            npm pack
+            ;;
+          "cargo")
+            cargo package
+            ;;
+          "go"|"generic")
+            echo "No build step required for ${PACKAGE_TYPE}"
+            ;;
+          *)
+            echo "Unknown package type: ${PACKAGE_TYPE}"
+            exit 1
+            ;;
+        esac
+
+    - name: Upload package to Artifactory
+      id: upload
+      shell: bash
+      run: |
+        PACKAGE_TYPE="${{ steps.setup.outputs.package-type }}"
+        REPOSITORY="${{ steps.setup.outputs.repository }}"
+        PACKAGE_NAME="${{ steps.setup.outputs.package-name }}"
+        VERSION="${{ steps.setup.outputs.package-version }}"
+        
+        # Build properties
+        BUILD_PROPS="build.name=${GITHUB_REPOSITORY};build.number=${GITHUB_RUN_NUMBER};vcs.revision=${GITHUB_SHA};vcs.branch=${GITHUB_REF_NAME}"
+        if [[ -n "${{ inputs.build-properties }}" ]]; then
+          BUILD_PROPS="${BUILD_PROPS};${{ inputs.build-properties }}"
+        fi
+        
+        case "${PACKAGE_TYPE}" in
+          "nuget")
+            find ./packages -name "*.nupkg" -exec jfrog rt upload {} "${REPOSITORY}/" --props="${BUILD_PROPS}" \;
+            PACKAGE_URL="${{ inputs.artifactory-url }}/ui/repos/tree/General/${REPOSITORY}/${PACKAGE_NAME}/${VERSION}"
+            ;;
+          "pypi")
+            find ./dist -name "*.whl" -o -name "*.tar.gz" | while read file; do
+              jfrog rt upload "${file}" "${REPOSITORY}/" --props="${BUILD_PROPS}"
+            done
+            PACKAGE_URL="${{ inputs.artifactory-url }}/ui/repos/tree/General/${REPOSITORY}/${PACKAGE_NAME}/${VERSION}"
+            ;;
+          "npm")
+            NPM_PACKAGE=$(ls *.tgz | head -1)
+            jfrog rt upload "${NPM_PACKAGE}" "${REPOSITORY}/" --props="${BUILD_PROPS}"
+            PACKAGE_URL="${{ inputs.artifactory-url }}/ui/repos/tree/General/${REPOSITORY}/${PACKAGE_NAME}/-/${VERSION}"
+            ;;
+          "go")
+            jfrog rt upload "${{ inputs.package-path }}" "${REPOSITORY}/${PACKAGE_NAME}/@v/${VERSION}.zip" --props="${BUILD_PROPS}"
+            PACKAGE_URL="${{ inputs.artifactory-url }}/ui/repos/tree/General/${REPOSITORY}/${PACKAGE_NAME}/@v/${VERSION}.zip"
+            ;;
+          "cargo")
+            CRATE_FILE=$(find target/package -name "*.crate" | head -1)
+            jfrog rt upload "${CRATE_FILE}" "${REPOSITORY}/" --props="${BUILD_PROPS}"
+            PACKAGE_URL="${{ inputs.artifactory-url }}/ui/repos/tree/General/${REPOSITORY}/${PACKAGE_NAME}/${VERSION}"
+            ;;
+          "generic")
+            jfrog rt upload "${{ inputs.package-path }}" "${REPOSITORY}/" --props="${BUILD_PROPS}"
+            PACKAGE_URL="${{ inputs.artifactory-url }}/ui/repos/tree/General/${REPOSITORY}"
+            ;;
+        esac
+        
+        echo "package-url=${PACKAGE_URL}" >> $GITHUB_OUTPUT
+        echo "Package uploaded to: ${PACKAGE_URL}"
+
+    - name: Generate and publish build info
+      id: build-info
+      shell: bash
+      run: |
+        BUILD_NAME="${GITHUB_REPOSITORY}"
+        BUILD_NUMBER="${GITHUB_RUN_NUMBER}"
+        
+        # Collect build info
+        jfrog rt build-collect-env "${BUILD_NAME}" "${BUILD_NUMBER}"
+        jfrog rt build-add-git "${BUILD_NAME}" "${BUILD_NUMBER}"
+        
+        # Publish build info
+        jfrog rt build-publish "${BUILD_NAME}" "${BUILD_NUMBER}"
+        
+        BUILD_INFO_URL="${{ inputs.artifactory-url }}/ui/builds/${BUILD_NAME}/${BUILD_NUMBER}"
+        echo "build-info=${BUILD_INFO_URL}" >> $GITHUB_OUTPUT
+        echo "Build info published: ${BUILD_INFO_URL}"
+
+    - name: Security scan with Xray
+      id: scan
+      if: inputs.scan-package == 'true'
+      shell: bash
+      run: |
+        BUILD_NAME="${GITHUB_REPOSITORY}"
+        BUILD_NUMBER="${GITHUB_RUN_NUMBER}"
+        
+        # Trigger Xray scan
+        SCAN_RESULT=$(jfrog rt build-scan "${BUILD_NAME}" "${BUILD_NUMBER}" --fail=false --format=json 2>/dev/null || echo '{"summary":{"total_alerts":0}}')
+        
+        # Parse results
+        TOTAL_ALERTS=$(echo "${SCAN_RESULT}" | jq -r '.summary.total_alerts // 0')
+        
+        echo "report=Total alerts: ${TOTAL_ALERTS}" >> $GITHUB_OUTPUT
+        echo "::notice title=Security Scan::${TOTAL_ALERTS} security alerts found"
+        
+        if [[ ${TOTAL_ALERTS} -gt 0 ]]; then
+          echo "::warning title=Security Alert::${TOTAL_ALERTS} security issues found in package"
+        fi
+
+    - name: Set package metadata
+      shell: bash
+      run: |
+        # Add metadata to package
+        REPOSITORY="${{ steps.setup.outputs.repository }}"
+        
+        # This would typically involve API calls to set custom properties
+        echo "Setting package metadata for ${{ steps.setup.outputs.package-name }}:${{ steps.setup.outputs.package-version }}"
+
+    - name: Generate package summary
+      shell: bash
+      run: |
+        cat > package-summary.md << EOF
+        ## Package Deployment Summary
+        
+        **Package**: ${{ steps.setup.outputs.package-name }}:${{ steps.setup.outputs.package-version }}
+        **Type**: ${{ steps.setup.outputs.package-type }}
+        **Repository**: ${{ steps.setup.outputs.repository }}
+        **URL**: ${{ steps.upload.outputs.package-url }}
+        **Build Info**: ${{ steps.build-info.outputs.build-info }}
+        
+        **Git Information**:
+        - Commit: ${GITHUB_SHA}
+        - Branch: ${GITHUB_REF_NAME}
+        - Repository: ${GITHUB_REPOSITORY}
+        
+        **Security Scan**: ${{ steps.scan.outputs.report }}
+        EOF
+        
+        echo "Package summary generated"

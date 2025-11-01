@@ -1,0 +1,12 @@
+{{ artifactory_log_dir }}/*.log {
+    daily
+    missingok
+    rotate 52
+    compress
+    delaycompress
+    notifempty
+    copytruncate
+    su {{ artifactory_user }} {{ artifactory_group }}
+    maxsize {{ artifactory_log_max_file_size }}
+    maxage 365
+}

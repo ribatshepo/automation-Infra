@@ -1,0 +1,319 @@
+name: '.NET CI/CD Pipeline'
+
+on:
+  workflow_call:
+    inputs:
+      dotnet-version:
+        description: '.NET version to use'
+        required: false
+        default: '8.0.x'
+        type: string
+      build-configuration:
+        description: 'Build configuration'
+        required: false
+        default: 'Release'
+        type: string
+      target-framework:
+        description: 'Target framework'
+        required: false
+        default: 'net8.0'
+        type: string
+      run-tests:
+        description: 'Run unit tests'
+        required: false
+        default: true
+        type: boolean
+      run-integration-tests:
+        description: 'Run integration tests'
+        required: false
+        default: false
+        type: boolean
+      security-scan:
+        description: 'Enable security scanning'
+        required: false
+        default: true
+        type: boolean
+      build-docker:
+        description: 'Build Docker image'
+        required: false
+        default: true
+        type: boolean
+      deploy-package:
+        description: 'Deploy NuGet package'
+        required: false
+        default: true
+        type: boolean
+      environment:
+        description: 'Deployment environment'
+        required: false
+        default: 'development'
+        type: string
+    secrets:
+      HARBOR_REGISTRY:
+        required: true
+      HARBOR_USERNAME:
+        required: true
+      HARBOR_PASSWORD:
+        required: true
+      HARBOR_PROJECT:
+        required: true
+      ARTIFACTORY_URL:
+        required: true
+      ARTIFACTORY_USERNAME:
+        required: true
+      ARTIFACTORY_PASSWORD:
+        required: true
+      ARTIFACTORY_NUGET_REPO:
+        required: true
+      SONAR_TOKEN:
+        required: false
+      JFROG_ACCESS_TOKEN:
+        required: false
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build-and-test:
+    name: 'Build and Test'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      package-name: ${{ steps.metadata.outputs.package-name }}
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 'Setup .NET'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: 'Extract project metadata'
+        id: metadata
+        run: |
+          # Find the main project file
+          PROJECT_FILE=$(find . -name "*.csproj" -not -path "./tests/*" -not -path "./*Test*/*" | head -1)
+          if [[ -z "$PROJECT_FILE" ]]; then
+            echo "::error::No .csproj file found"
+            exit 1
+          fi
+          
+          # Extract package name and version
+          PACKAGE_NAME=$(basename $(dirname "$PROJECT_FILE"))
+          VERSION=$(grep -o '<Version>[^<]*' "$PROJECT_FILE" | cut -d'>' -f2 || echo "1.0.0")
+          
+          # If no version in project file, generate one
+          if [[ "$VERSION" == "1.0.0" ]]; then
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              VERSION=${GITHUB_REF#refs/tags/}
+            else
+              VERSION="1.0.0-${GITHUB_SHA::8}"
+            fi
+          fi
+          
+          echo "project-file=$PROJECT_FILE" >> $GITHUB_OUTPUT
+          echo "package-name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          echo "Project: $PACKAGE_NAME v$VERSION"
+
+      - name: 'Set version'
+        id: version
+        run: |
+          VERSION="${{ steps.metadata.outputs.version }}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          # Update project file if needed
+          sed -i "s/<Version>.*<\/Version>/<Version>$VERSION<\/Version>/" "${{ steps.metadata.outputs.project-file }}"
+
+      - name: 'Restore dependencies'
+        run: dotnet restore
+
+      - name: 'Build application'
+        run: |
+          dotnet build \
+            --configuration ${{ inputs.build-configuration }} \
+            --no-restore \
+            --verbosity normal \
+            -p:Version=${{ steps.version.outputs.version }}
+
+      - name: 'Run unit tests'
+        if: inputs.run-tests
+        run: |
+          dotnet test \
+            --configuration ${{ inputs.build-configuration }} \
+            --no-build \
+            --verbosity normal \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ./coverage \
+            --logger trx \
+            --logger "console;verbosity=detailed"
+
+      - name: 'Upload test results'
+        if: inputs.run-tests && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            **/*.trx
+            ./coverage/**/coverage.cobertura.xml
+
+      - name: 'Run integration tests'
+        if: inputs.run-integration-tests
+        run: |
+          dotnet test \
+            --configuration ${{ inputs.build-configuration }} \
+            --no-build \
+            --verbosity normal \
+            --filter "Category=Integration"
+
+      - name: 'JFrog Xray security scan'
+        if: inputs.security-scan
+        env:
+          JFROG_CLI_BUILD_NAME: ${{ github.repository }}
+          JFROG_CLI_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          # Install JFrog CLI
+          curl -fL https://getcli.jfrog.io | sh
+          sudo mv jfrog /usr/local/bin/
+          
+          # Configure JFrog CLI
+          jfrog config add artifactory \
+            --url="${{ secrets.ARTIFACTORY_URL }}" \
+            --user="${{ secrets.ARTIFACTORY_USERNAME }}" \
+            --password="${{ secrets.ARTIFACTORY_PASSWORD }}" \
+            --interactive=false
+          
+          # Scan .NET dependencies
+          echo "### JFrog Xray Security Scan" >> $GITHUB_STEP_SUMMARY
+          
+          # Use dotnet list package to get dependencies and scan
+          dotnet list package --include-transitive --format json > packages.json
+          
+          # Audit .NET packages
+          jfrog audit --nuget --format=json > xray-report.json || true
+          
+          # Parse results
+          CRITICAL=$(cat xray-report.json | jq '.vulnerabilities[]? | select(.severity=="Critical") | .summary' | wc -l 2>/dev/null || echo "0")
+          HIGH=$(cat xray-report.json | jq '.vulnerabilities[]? | select(.severity=="High") | .summary' | wc -l 2>/dev/null || echo "0")
+          
+          echo " **Xray Scan Results:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Critical: $CRITICAL" >> $GITHUB_STEP_SUMMARY
+          echo "- High: $HIGH" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ $CRITICAL -gt 0 ]]; then
+            echo "::warning title=Security Alert::$CRITICAL critical vulnerabilities found in .NET packages"
+          fi
+
+      - name: 'Create NuGet package'
+        if: inputs.deploy-package
+        run: |
+          dotnet pack \
+            --configuration ${{ inputs.build-configuration }} \
+            --no-build \
+            --output ./packages \
+            --include-symbols \
+            --include-source \
+            -p:PackageVersion=${{ steps.version.outputs.version }}
+
+      - name: 'Upload build artifacts'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            ./packages/*.nupkg
+            ./packages/*.snupkg
+            **/bin/${{ inputs.build-configuration }}/**
+
+  deploy-package:
+    name: 'Deploy NuGet Package'
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: inputs.deploy-package && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Download build artifacts'
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+
+      - name: 'Deploy to Artifactory'
+        uses: ./.github/actions/artifactory-push
+        with:
+          artifactory-url: ${{ secrets.ARTIFACTORY_URL }}
+          username: ${{ secrets.ARTIFACTORY_USERNAME }}
+          password: ${{ secrets.ARTIFACTORY_PASSWORD }}
+          repository: ${{ secrets.ARTIFACTORY_NUGET_REPO }}
+          package-type: 'nuget'
+          package-path: './packages'
+          package-name: ${{ needs.build-and-test.outputs.package-name }}
+          package-version: ${{ needs.build-and-test.outputs.version }}
+          build-properties: 'environment=${{ inputs.environment }}'
+          scan-package: ${{ inputs.security-scan }}
+
+  build-docker:
+    name: 'Build and Push Docker Image'
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: inputs.build-docker && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Download build artifacts'
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+
+      - name: 'Build and push to Harbor'
+        uses: ./.github/actions/harbor-push
+        with:
+          registry: ${{ secrets.HARBOR_REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+          project: ${{ secrets.HARBOR_PROJECT }}
+          image-name: ${{ needs.build-and-test.outputs.package-name }}
+          dockerfile: './Dockerfile'
+          context: '.'
+          build-args: |
+            VERSION=${{ needs.build-and-test.outputs.version }}
+            BUILD_CONFIGURATION=${{ inputs.build-configuration }}
+          tags: ${{ inputs.environment }}
+          scan-image: ${{ inputs.security-scan }}
+
+  deploy:
+    name: 'Deploy Application'
+    runs-on: ubuntu-latest
+    needs: [build-and-test, deploy-package, build-docker]
+    if: always() && needs.build-and-test.result == 'success' && (needs.deploy-package.result == 'success' || needs.deploy-package.result == 'skipped') && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped')
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: 'Deployment summary'
+        run: |
+          echo "##  .NET Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Application**: ${{ needs.build-and-test.outputs.package-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: ${{ needs.build-and-test.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit**: ${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Components Deployed:" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ inputs.deploy-package }}" == "true" ]]; then
+            echo "- NuGet Package to Artifactory" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ inputs.build-docker }}" == "true" ]]; then
+            echo "- Docker Image to Harbor" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -1,0 +1,16 @@
+{
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "100m",
+    "max-file": "3"
+  },
+  "storage-driver": "overlay2",
+  "insecure-registries": [
+    "{{ harbor_hostname }}:{{ harbor_http_port }}",
+    "{{ harbor_hostname }}:{{ harbor_https_port }}"
+  ],
+  "registry-mirrors": [
+    "{{ harbor_base_url }}"
+  ]
+}

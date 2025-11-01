@@ -1,0 +1,190 @@
+name: 'Harbor Docker Push'
+description: 'Build and push Docker images to Harbor registry'
+inputs:
+  registry:
+    description: 'Harbor registry URL'
+    required: true
+  username:
+    description: 'Harbor username'
+    required: true
+  password:
+    description: 'Harbor password'
+    required: true
+  project:
+    description: 'Harbor project name'
+    required: true
+  image-name:
+    description: 'Docker image name'
+    required: true
+  dockerfile:
+    description: 'Path to Dockerfile'
+    required: false
+    default: './Dockerfile'
+  context:
+    description: 'Build context path'
+    required: false
+    default: '.'
+  build-args:
+    description: 'Docker build arguments'
+    required: false
+    default: ''
+  tags:
+    description: 'Additional tags (comma-separated)'
+    required: false
+    default: ''
+  scan-image:
+    description: 'Enable security scanning'
+    required: false
+    default: 'true'
+  push-latest:
+    description: 'Push latest tag'
+    required: false
+    default: 'true'
+
+outputs:
+  image-digest:
+    description: 'Image digest'
+    value: ${{ steps.build.outputs.digest }}
+  image-url:
+    description: 'Full image URL'
+    value: ${{ steps.metadata.outputs.image-url }}
+  vulnerability-report:
+    description: 'Vulnerability scan report'
+    value: ${{ steps.scan.outputs.report }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Harbor
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ inputs.username }}
+        password: ${{ inputs.password }}
+
+    - name: Extract metadata
+      id: metadata
+      shell: bash
+      run: |
+        # Generate image tags
+        IMAGE_BASE="${{ inputs.registry }}/${{ inputs.project }}/${{ inputs.image-name }}"
+        
+        # Default tags
+        TAGS="${IMAGE_BASE}:${GITHUB_SHA::8}"
+        
+        # Add branch/tag based tags
+        if [[ "$GITHUB_REF" == refs/heads/main ]] || [[ "$GITHUB_REF" == refs/heads/master ]]; then
+          if [[ "${{ inputs.push-latest }}" == "true" ]]; then
+            TAGS="${TAGS},${IMAGE_BASE}:latest"
+          fi
+        elif [[ "$GITHUB_REF" == refs/heads/* ]]; then
+          BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/} | sed 's/[^a-zA-Z0-9.-]/-/g')
+          TAGS="${TAGS},${IMAGE_BASE}:${BRANCH_NAME}"
+        elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          TAGS="${TAGS},${IMAGE_BASE}:${TAG_NAME}"
+        fi
+        
+        # Add custom tags
+        if [[ -n "${{ inputs.tags }}" ]]; then
+          IFS=',' read -ra CUSTOM_TAGS <<< "${{ inputs.tags }}"
+          for tag in "${CUSTOM_TAGS[@]}"; do
+            TAGS="${TAGS},${IMAGE_BASE}:${tag}"
+          done
+        fi
+        
+        echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+        echo "image-url=${IMAGE_BASE}:${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
+        echo "Image tags: ${TAGS}"
+
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.dockerfile }}
+        push: true
+        tags: ${{ steps.metadata.outputs.tags }}
+        build-args: ${{ inputs.build-args }}
+        platforms: linux/amd64,linux/arm64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        provenance: false
+        sbom: false
+
+    - name: Security scan with Trivy
+      id: scan
+      if: inputs.scan-image == 'true'
+      shell: bash
+      run: |
+        # Install Trivy
+        sudo apt-get update && sudo apt-get install -y wget
+        wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_Linux-64bit.tar.gz
+        tar zxvf trivy_Linux-64bit.tar.gz
+        sudo mv trivy /usr/local/bin/
+        
+        # Scan image
+        IMAGE_URL="${{ steps.metadata.outputs.image-url }}"
+        trivy image --format json --output scan-results.json "${IMAGE_URL}"
+        
+        # Generate summary
+        CRITICAL=$(cat scan-results.json | jq '.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL") | .VulnerabilityID' | wc -l)
+        HIGH=$(cat scan-results.json | jq '.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH") | .VulnerabilityID' | wc -l)
+        
+        echo "report=Critical: ${CRITICAL}, High: ${HIGH}" >> $GITHUB_OUTPUT
+        echo "::notice title=Security Scan::Critical: ${CRITICAL}, High: ${HIGH} vulnerabilities found"
+        
+        # Fail if critical vulnerabilities found (optional)
+        if [[ ${CRITICAL} -gt 0 ]]; then
+          echo "::warning title=Security Alert::${CRITICAL} critical vulnerabilities found in image"
+        fi
+
+    - name: Update Harbor project metadata
+      shell: bash
+      run: |
+        # Update project with build metadata
+        curl -X POST \
+          -H "Authorization: Basic $(echo -n '${{ inputs.username }}:${{ inputs.password }}' | base64)" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "labels": [
+              {"name": "git-commit", "value": "'${GITHUB_SHA}'"},
+              {"name": "git-branch", "value": "'${GITHUB_REF_NAME}'"},
+              {"name": "build-date", "value": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}
+            ]
+          }' \
+          "${{ inputs.registry }}/api/v2.0/projects/${{ inputs.project }}/repositories/${{ inputs.image-name }}/artifacts/${GITHUB_SHA::8}/labels" || true
+
+    - name: Generate deployment manifest
+      shell: bash
+      run: |
+        cat > deployment-manifest.yaml << EOF
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${{ inputs.image-name }}
+          labels:
+            app: ${{ inputs.image-name }}
+            version: ${GITHUB_SHA::8}
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: ${{ inputs.image-name }}
+          template:
+            metadata:
+              labels:
+                app: ${{ inputs.image-name }}
+                version: ${GITHUB_SHA::8}
+            spec:
+              containers:
+              - name: ${{ inputs.image-name }}
+                image: ${{ steps.metadata.outputs.image-url }}
+                ports:
+                - containerPort: 8080
+        EOF
+        
+        echo "Generated deployment manifest for image: ${{ steps.metadata.outputs.image-url }}"

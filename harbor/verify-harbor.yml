@@ -1,0 +1,136 @@
+---
+- name: Verify Harbor Container Registry Installation
+  hosts: registries
+  become: yes
+  gather_facts: yes
+  vars_files:
+    - vars.yml
+    - vault.yml
+
+  tasks:
+    - name: Check Harbor service status
+      systemd:
+        name: harbor
+        state: started
+      register: harbor_service_status
+
+    - name: Verify Harbor is responding to API calls
+      uri:
+        url: "{{ harbor_base_url }}/api/v2.0/systeminfo"
+        method: GET
+        status_code: 200
+        timeout: 30
+        validate_certs: "{{ harbor_ssl_verify }}"
+      register: harbor_api_check
+      retries: 5
+      delay: 10
+
+    - name: Check Harbor Docker containers
+      command: docker-compose ps
+      args:
+        chdir: "{{ harbor_install_dir }}/harbor"
+      register: harbor_containers
+      changed_when: false
+
+    - name: Display Harbor container status
+      debug:
+        msg: "{{ harbor_containers.stdout_lines }}"
+
+    - name: Verify Harbor components are healthy
+      uri:
+        url: "{{ harbor_base_url }}/api/v2.0/health"
+        method: GET
+        status_code: 200
+        validate_certs: "{{ harbor_ssl_verify }}"
+      register: harbor_health_check
+
+    - name: Display Harbor health status
+      debug:
+        msg: "Harbor health check: {{ harbor_health_check.json }}"
+
+    - name: Test Docker login to Harbor
+      command: >
+        docker login {{ harbor_hostname }}:{{ harbor_https_port if harbor_ssl_enabled else harbor_http_port }}
+        -u {{ harbor_admin_username }}
+        -p {{ harbor_admin_password }}
+      register: docker_login_test
+      changed_when: false
+      no_log: true
+
+    - name: Test basic Docker operations
+      block:
+        - name: Pull a small test image
+          command: docker pull alpine:latest
+          changed_when: false
+
+        - name: Tag image for Harbor
+          command: >
+            docker tag alpine:latest
+            {{ harbor_hostname }}:{{ harbor_https_port if harbor_ssl_enabled else harbor_http_port }}/library/alpine:test
+          changed_when: false
+
+        - name: Push image to Harbor
+          command: >
+            docker push
+            {{ harbor_hostname }}:{{ harbor_https_port if harbor_ssl_enabled else harbor_http_port }}/library/alpine:test
+          changed_when: false
+
+        - name: Remove local test images
+          command: "{{ item }}"
+          loop:
+            - >
+              docker rmi
+              {{ harbor_hostname }}:{{ harbor_https_port if harbor_ssl_enabled else harbor_http_port }}/library/alpine:test
+            - docker rmi alpine:latest
+          changed_when: false
+          failed_when: false
+
+    - name: Check Harbor disk usage
+      command: du -sh {{ harbor_data_dir }}
+      register: harbor_disk_usage
+      changed_when: false
+
+    - name: Display Harbor disk usage
+      debug:
+        msg: "Harbor data directory usage: {{ harbor_disk_usage.stdout }}"
+
+    - name: Verify Harbor projects exist
+      uri:
+        url: "{{ harbor_base_url }}/api/v2.0/projects"
+        method: GET
+        headers:
+          Authorization: "Basic {{ (harbor_admin_username + ':' + harbor_admin_password) | b64encode }}"
+        status_code: 200
+        validate_certs: "{{ harbor_ssl_verify }}"
+      register: harbor_projects_check
+
+    - name: Display Harbor projects
+      debug:
+        msg: "Harbor projects: {{ harbor_projects_check.json | map(attribute='name') | list }}"
+
+    - name: Check Harbor logs for errors
+      command: >
+        docker-compose logs --tail=50 core
+      args:
+        chdir: "{{ harbor_install_dir }}/harbor"
+      register: harbor_logs
+      changed_when: false
+
+    - name: Display recent Harbor logs
+      debug:
+        msg: "{{ harbor_logs.stdout_lines[-10:] }}"
+
+  post_tasks:
+    - name: Harbor verification summary
+      debug:
+        msg: |
+          Harbor Verification Summary:
+          ===========================
+          Service Status: {{ 'Running' if harbor_service_status.status.ActiveState == 'active' else 'Not Running' }}
+          API Accessible: {{ 'Yes' if harbor_api_check.status == 200 else 'No' }}
+          Health Check: {{ 'Healthy' if harbor_health_check.status == 200 else 'Unhealthy' }}
+          Docker Login: {{ 'Success' if docker_login_test.rc == 0 else 'Failed' }}
+          Harbor URL: {{ harbor_base_url }}
+          Data Usage: {{ harbor_disk_usage.stdout }}
+          
+          Harbor is {{ 'ready for use!' if (harbor_service_status.status.ActiveState == 'active' and harbor_api_check.status == 200) else 'not fully operational' }}

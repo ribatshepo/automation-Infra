@@ -1,0 +1,57 @@
+[Unit]
+Description=MinIO Object Storage Server
+Documentation=https://docs.min.io
+Wants=network-online.target
+After=network-online.target
+AssertFileIsExecutable={{ minio_home }}/minio
+
+[Service]
+Type=notify
+User={{ minio_user }}
+Group={{ minio_group }}
+
+# Security Settings
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ minio_data_dir }} {{ minio_config_dir }} /var/log/minio {{ minio_backup_dir }}
+PrivateTmp=true
+PrivateDevices=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+NoNewPrivileges=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+# Resource Limits
+LimitNOFILE={{ minio_max_open_files }}
+LimitNPROC={{ minio_max_processes }}
+TasksMax={{ minio_max_processes }}
+
+# Environment
+EnvironmentFile={{ minio_config_dir }}/minio.env
+WorkingDirectory={{ minio_home }}
+
+# MinIO Server Execution
+ExecStart={{ minio_home }}/minio server {{ minio_storage_path }} --console-address {{ minio_console_bind_address }}:{{ minio_console_port }}
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Health Check
+HealthCheckInterval=30s
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=minio
+
+# Kill Settings
+TimeoutStopSec=120
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,86 @@
+# PostgreSQL Variables File
+# Copy this to group_vars/databases/vars.yml and customize as needed
+
+---
+# PostgreSQL Version
+postgresql_version: "15"
+
+# Connection Settings
+postgresql_port: 5432
+postgresql_listen_addresses: "*"
+
+# Performance Tuning (adjust based on your 8GB RAM allocation)
+postgresql_max_connections: 200
+postgresql_shared_buffers: "2GB"        # 25% of RAM
+postgresql_effective_cache_size: "6GB"  # 75% of RAM
+postgresql_maintenance_work_mem: "256MB"
+postgresql_checkpoint_completion_target: 0.9
+postgresql_wal_buffers: "16MB"
+postgresql_default_statistics_target: 100
+postgresql_random_page_cost: 1.1       # For SSD storage
+postgresql_effective_io_concurrency: 200  # For SSD storage
+
+# Database Configuration
+postgresql_databases:
+  - name: "app_production"
+    encoding: "UTF-8"
+    collate: "en_US.UTF-8"
+    ctype: "en_US.UTF-8"
+  - name: "app_staging"
+    encoding: "UTF-8"
+    collate: "en_US.UTF-8"
+    ctype: "en_US.UTF-8"
+  - name: "monitoring"
+    encoding: "UTF-8"
+    collate: "en_US.UTF-8"
+    ctype: "en_US.UTF-8"
+
+# User Configuration
+postgresql_users:
+  - name: "app_user"
+    password: "{{ postgresql_app_password | default('ChangeMe123!') }}"
+    databases: ["app_production", "app_staging"]
+    privileges: "ALL"
+  - name: "readonly_user"
+    password: "{{ postgresql_readonly_password | default('ReadOnly123!') }}"
+    databases: ["app_production", "app_staging", "monitoring"]
+    privileges: "SELECT"
+  - name: "monitoring_user"
+    password: "{{ postgresql_monitoring_password | default('Monitor123!') }}"
+    databases: ["monitoring"]
+    privileges: "ALL"
+
+# Network Access Control
+postgresql_allowed_hosts:
+  - "10.100.10.0/24"    # Infrastructure network
+  - "127.0.0.1/32"      # Localhost
+  - "::1/128"           # IPv6 localhost
+
+# Backup Configuration
+postgresql_backup_retention_days: 7
+postgresql_backup_schedule:
+  minute: "0"
+  hour: "2"
+  day: "*"
+  month: "*"
+  weekday: "*"
+
+# SSL Configuration
+postgresql_ssl_enabled: true
+postgresql_ssl_cert_file: "/etc/ssl/certs/ssl-cert-snakeoil.pem"
+postgresql_ssl_key_file: "/etc/ssl/private/ssl-cert-snakeoil.key"
+
+# Logging Configuration
+postgresql_log_min_duration_statement: 1000  # Log queries taking longer than 1 second
+postgresql_log_connections: true
+postgresql_log_disconnections: true
+postgresql_log_checkpoints: true
+postgresql_log_lock_waits: true
+
+# Extensions to install
+postgresql_extensions:
+  - "uuid-ossp"
+  - "pgcrypto"
+  - "unaccent"
+  - "postgis"
+  - "pg_stat_statements"

@@ -1,0 +1,42 @@
+---
+# Enhanced database initialization with proper sequencing
+- name: Ensure PostgreSQL is running before Artifactory
+  systemd:
+    name: postgresql
+    state: started
+    enabled: yes
+
+- name: Wait for PostgreSQL to be ready
+  wait_for:
+    port: 5432
+    host: localhost
+    timeout: 60
+
+- name: Test database connectivity before proceeding
+  postgresql_query:
+    login_host: localhost
+    login_user: "{{ vault_artifactory_db_user }}"
+    login_password: "{{ vault_artifactory_db_password }}"
+    db: "{{ artifactory_db_name }}"
+    query: "SELECT 1"
+  register: db_connectivity
+  retries: 5
+  delay: 5
+  until: db_connectivity is succeeded
+
+- name: Check if Artifactory database is initialized
+  postgresql_query:
+    login_host: localhost
+    login_user: "{{ vault_artifactory_db_user }}"
+    login_password: "{{ vault_artifactory_db_password }}"
+    db: "{{ artifactory_db_name }}"
+    query: "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
+  register: db_tables_count
+
+- name: Display database initialization status
+  debug:
+    msg: |
+      Database Status:
+      - PostgreSQL: {{ 'Running' if db_connectivity is succeeded else 'Not Ready' }}
+      - Tables count: {{ db_tables_count.query_result[0][0] if db_tables_count is succeeded else 'Unknown' }}
+      - Database initialized: {{ 'Yes' if (db_tables_count is succeeded and db_tables_count.query_result[0][0] > 10) else 'No' }}

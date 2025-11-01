@@ -1,0 +1,265 @@
+---
+- name: Verify PostgreSQL Installation and Configuration
+  hosts: databases
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    postgresql_version: "15"
+    expected_databases:
+      - "postgres"
+      - "app_production"
+      - "app_staging"
+    expected_users:
+      - "postgres"
+      - "app_user"
+      - "readonly_user"
+    
+  tasks:
+    - name: Check if PostgreSQL packages are installed
+      package_facts:
+        manager: apt
+      
+    - name: Verify PostgreSQL packages installation
+      assert:
+        that:
+          - "('postgresql-' + postgresql_version) in ansible_facts.packages"
+          - "('postgresql-client-' + postgresql_version) in ansible_facts.packages"
+          - "'postgresql-common' in ansible_facts.packages"
+        fail_msg: "PostgreSQL packages are not properly installed"
+        success_msg: "PostgreSQL packages are installed correctly"
+      tags:
+        - verify
+        - packages
+
+    - name: Check PostgreSQL service status
+      service_facts:
+      
+    - name: Verify PostgreSQL service is running
+      assert:
+        that:
+          - ansible_facts.services['postgresql@15-main.service'].state == 'running'
+          - ansible_facts.services['postgresql@15-main.service'].status == 'active'
+        fail_msg: "PostgreSQL service is not running or not enabled"
+        success_msg: "PostgreSQL service is running and enabled"
+      tags:
+        - verify
+        - service
+
+    - name: Test PostgreSQL connection
+      shell: sudo -u postgres psql -c "SELECT 1;"
+      register: postgres_ping
+      changed_when: false
+      tags:
+        - verify
+        - connection
+
+    - name: Verify PostgreSQL is accepting connections
+      assert:
+        that:
+          - postgres_ping.rc == 0
+        fail_msg: "PostgreSQL is not accepting connections"
+        success_msg: "PostgreSQL is accepting connections"
+      tags:
+        - verify
+        - connection
+
+    - name: Get PostgreSQL version
+      shell: sudo -u postgres psql -c "SELECT version();"
+      register: postgres_version
+      changed_when: false
+      tags:
+        - verify
+        - version
+
+    - name: Display PostgreSQL version
+      debug:
+        msg: "PostgreSQL Version: {{ postgres_version.stdout_lines[2] if postgres_version.stdout_lines|length > 2 else 'Unable to determine' }}"
+      tags:
+        - verify
+        - version
+
+    - name: List all databases
+      shell: sudo -u postgres psql -c "SELECT datname FROM pg_database WHERE datistemplate = false;"
+      register: existing_databases
+      changed_when: false
+      tags:
+        - verify
+        - databases
+
+    - name: Verify expected databases exist
+      assert:
+        that:
+          - item in existing_databases.stdout
+        fail_msg: "Database {{ item }} does not exist"
+        success_msg: "Database {{ item }} exists"
+      loop: "{{ expected_databases }}"
+      tags:
+        - verify
+        - databases
+
+    - name: List all users
+      shell: sudo -u postgres psql -c "SELECT usename FROM pg_user;"
+      register: existing_users
+      changed_when: false
+      tags:
+        - verify
+        - users
+
+    - name: Verify expected users exist
+      assert:
+        that:
+          - item in existing_users.stdout
+        fail_msg: "User {{ item }} does not exist"
+        success_msg: "User {{ item }} exists"
+      loop: "{{ expected_users }}"
+      tags:
+        - verify
+        - users
+
+    - name: Check PostgreSQL configuration files
+      stat:
+        path: "{{ item }}"
+      register: config_files
+      loop:
+        - "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
+        - "/etc/postgresql/{{ postgresql_version }}/main/pg_hba.conf"
+        - "/etc/postgresql/{{ postgresql_version }}/main/conf.d/99-performance.conf"
+      tags:
+        - verify
+        - config
+
+    - name: Verify configuration files exist
+      assert:
+        that:
+          - item.stat.exists
+        fail_msg: "Configuration file {{ item.item }} does not exist"
+        success_msg: "Configuration file {{ item.item }} exists"
+      loop: "{{ config_files.results }}"
+      tags:
+        - verify
+        - config
+
+    - name: Check PostgreSQL is listening on correct port
+      wait_for:
+        port: 5432
+        host: 0.0.0.0
+        timeout: 10
+      tags:
+        - verify
+        - network
+        
+    - name: Check installed extensions
+      shell: sudo -u postgres psql -d app_production -c "SELECT extname FROM pg_extension;"
+      register: installed_extensions
+      changed_when: false
+      tags:
+        - verify
+        - extensions
+
+    - name: Display installed extensions
+      debug:
+        msg: "Installed extensions: {{ installed_extensions.stdout }}"
+      tags:
+        - verify
+        - extensions
+
+    - name: Check PostgreSQL log directory
+      stat:
+        path: "/var/log/postgresql"
+      register: log_dir
+      tags:
+        - verify
+        - logging
+
+    - name: Check backup directory
+      stat:
+        path: "/var/backups/postgresql"
+      register: backup_dir
+      tags:
+        - verify
+        - backup
+
+    - name: Check backup script
+      stat:
+        path: "/usr/local/bin/postgresql-backup.sh"
+      register: backup_script
+      tags:
+        - verify
+        - backup
+
+    - name: Verify backup setup
+      assert:
+        that:
+          - backup_dir.stat.exists
+          - backup_script.stat.exists
+          - backup_script.stat.executable
+        fail_msg: "Backup setup is not complete"
+        success_msg: "Backup setup is properly configured"
+      tags:
+        - verify
+        - backup
+
+    - name: Check PostgreSQL process
+      command: pgrep -f postgres
+      register: postgres_processes
+      changed_when: false
+      tags:
+        - verify
+        - processes
+
+    - name: Display PostgreSQL processes
+      debug:
+        msg: "PostgreSQL processes running: {{ postgres_processes.stdout_lines | length }}"
+      tags:
+        - verify
+        - processes
+
+    - name: Get PostgreSQL configuration settings
+      shell: sudo -u postgres psql -d postgres -c "SELECT name, setting, unit FROM pg_settings WHERE name IN ('max_connections', 'shared_buffers', 'effective_cache_size', 'maintenance_work_mem') ORDER BY name;"
+      register: pg_settings
+      changed_when: false
+      tags:
+        - verify
+        - config
+
+    - name: Display key PostgreSQL settings
+      debug:
+        msg: "PostgreSQL settings: {{ pg_settings.stdout }}"
+      tags:
+        - verify
+        - config
+
+    - name: Test simple query performance
+      shell: sudo -u postgres psql -d app_production -c "SELECT COUNT(*) FROM pg_stat_activity;"
+      register: test_query
+      changed_when: false
+      tags:
+        - verify
+        - performance
+
+    - name: Create comprehensive status report
+      debug:
+        msg: |
+          ===========================================
+          PostgreSQL Status Report for {{ inventory_hostname }}
+          ===========================================
+          Service Status: {{ 'Running' if ansible_facts.services['postgresql@15-main.service'].state == 'running' else 'Stopped' }}
+          Service Active: {{ 'Yes' if ansible_facts.services['postgresql@15-main.service'].status == 'active' else 'No' }}
+          Version: {{ postgres_version.stdout_lines[2] if postgres_version.stdout_lines|length > 2 else 'Unable to determine' }}
+          Port: 5432
+          Databases: {{ existing_databases.stdout }}
+          Users: {{ existing_users.stdout }}
+          Extensions: {{ installed_extensions.stdout }}
+          Backup Setup: {{ 'Configured' if backup_dir.stat.exists and backup_script.stat.exists else 'Not Configured' }}
+          ===========================================
+      tags:
+        - verify
+        - summary
+
+    - name: Final verification success message
+      debug:
+        msg: "PostgreSQL verification completed successfully! All components are operational."
+      tags:
+        - verify
+        - summary

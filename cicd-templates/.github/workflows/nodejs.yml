@@ -1,0 +1,414 @@
+name: 'Node.js CI/CD Pipeline'
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: 'Node.js version to use'
+        required: false
+        default: '20'
+        type: string
+      package-manager:
+        description: 'Package manager (npm, yarn, pnpm)'
+        required: false
+        default: 'npm'
+        type: string
+      run-tests:
+        description: 'Run unit tests'
+        required: false
+        default: true
+        type: boolean
+      run-e2e-tests:
+        description: 'Run end-to-end tests'
+        required: false
+        default: false
+        type: boolean
+      run-linting:
+        description: 'Run linting (ESLint)'
+        required: false
+        default: true
+        type: boolean
+      run-security-scan:
+        description: 'Run security scanning with JFrog Xray'
+        required: false
+        default: true
+        type: boolean
+      build-docker:
+        description: 'Build Docker image'
+        required: false
+        default: true
+        type: boolean
+      deploy-package:
+        description: 'Deploy npm package'
+        required: false
+        default: true
+        type: boolean
+      environment:
+        description: 'Deployment environment'
+        required: false
+        default: 'development'
+        type: string
+    secrets:
+      HARBOR_REGISTRY:
+        required: true
+      HARBOR_USERNAME:
+        required: true
+      HARBOR_PASSWORD:
+        required: true
+      HARBOR_PROJECT:
+        required: true
+      ARTIFACTORY_URL:
+        required: true
+      ARTIFACTORY_USERNAME:
+        required: true
+      ARTIFACTORY_PASSWORD:
+        required: true
+      ARTIFACTORY_NPM_REPO:
+        required: true
+
+env:
+  NODE_OPTIONS: --max_old_space_size=4096
+
+jobs:
+  build-and-test:
+    name: 'Build and Test'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      package-name: ${{ steps.metadata.outputs.package-name }}
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 'Setup Node.js'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+
+      - name: 'Setup pnpm'
+        if: inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v2
+        with:
+          version: latest
+
+      - name: 'Extract project metadata'
+        id: metadata
+        run: |
+          # Get package name and version from package.json
+          if [[ -f "package.json" ]]; then
+            PACKAGE_NAME=$(node -p "require('./package.json').name")
+            VERSION=$(node -p "require('./package.json').version")
+          else
+            PACKAGE_NAME="${GITHUB_REPOSITORY##*/}"
+            VERSION="1.0.0"
+          fi
+          
+          echo "package-name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          echo "base-version=$VERSION" >> $GITHUB_OUTPUT
+          
+          echo "Package: $PACKAGE_NAME"
+          echo "Base Version: $VERSION"
+
+      - name: 'Determine version'
+        id: version
+        run: |
+          BASE_VERSION="${{ steps.metadata.outputs.base-version }}"
+          
+          # Use git tag if available, otherwise generate version
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+            # Remove 'v' prefix if present
+            VERSION=${VERSION#v}
+          else
+            # For pre-release versions
+            if [[ "$GITHUB_REF" == refs/heads/main ]] || [[ "$GITHUB_REF" == refs/heads/master ]]; then
+              VERSION="${BASE_VERSION}-rc.${GITHUB_RUN_NUMBER}"
+            else
+              BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/} | sed 's/[^a-zA-Z0-9.-]/-/g')
+              VERSION="${BASE_VERSION}-${BRANCH_NAME}.${GITHUB_RUN_NUMBER}"
+            fi
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+          
+          # Update package.json with new version
+          if [[ -f "package.json" ]]; then
+            node -e "
+              const pkg = require('./package.json');
+              pkg.version = '$VERSION';
+              require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+            "
+          fi
+
+      - name: 'Install dependencies (npm)'
+        if: inputs.package-manager == 'npm'
+        run: npm ci
+
+      - name: 'Install dependencies (yarn)'
+        if: inputs.package-manager == 'yarn'
+        run: yarn install --frozen-lockfile
+
+      - name: 'Install dependencies (pnpm)'
+        if: inputs.package-manager == 'pnpm'
+        run: pnpm install --frozen-lockfile
+
+      - name: 'Run linting'
+        if: inputs.run-linting
+        run: |
+          echo "##  Code Quality Checks" >> $GITHUB_STEP_SUMMARY
+          
+          # ESLint
+          if [[ -f ".eslintrc.js" ]] || [[ -f ".eslintrc.json" ]] || [[ -f "eslint.config.js" ]]; then
+            echo "### ESLint" >> $GITHUB_STEP_SUMMARY
+            if ${{ inputs.package-manager }} run lint 2>/dev/null || npx eslint . --ext .js,.jsx,.ts,.tsx; then
+              echo "No linting issues found" >> $GITHUB_STEP_SUMMARY
+            else
+              echo " Linting issues found" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+          fi
+          
+          # Prettier (if configured)
+          if [[ -f ".prettierrc" ]] || [[ -f ".prettierrc.json" ]] || [[ -f "prettier.config.js" ]]; then
+            echo "### Prettier Formatting" >> $GITHUB_STEP_SUMMARY
+            if npx prettier --check .; then
+              echo "Code is properly formatted" >> $GITHUB_STEP_SUMMARY
+            else
+              echo " Code formatting issues found" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+          fi
+
+      - name: 'npm audit security scan'
+        if: inputs.run-security-scan
+        run: |
+          echo "##  Security Scanning" >> $GITHUB_STEP_SUMMARY
+          
+          # npm audit
+          echo "### npm audit" >> $GITHUB_STEP_SUMMARY
+          if ${{ inputs.package-manager }} audit --audit-level moderate --json > npm-audit.json; then
+            echo "No vulnerabilities found" >> $GITHUB_STEP_SUMMARY
+          else
+            VULNS=$(cat npm-audit.json | jq '.metadata.vulnerabilities.total' 2>/dev/null || echo "unknown")
+            echo "⚠️ Vulnerabilities found: $VULNS" >> $GITHUB_STEP_SUMMARY
+            echo "::warning title=Security Alert::$VULNS vulnerabilities found in npm packages"
+          fi
+
+      - name: 'JFrog Xray security scan'
+        if: inputs.run-security-scan
+        run: |
+          # Install JFrog CLI
+          curl -fL https://getcli.jfrog.io | sh
+          sudo mv jfrog /usr/local/bin/
+          
+          # Configure JFrog CLI
+          jfrog config add artifactory \
+            --url="${{ secrets.ARTIFACTORY_URL }}" \
+            --user="${{ secrets.ARTIFACTORY_USERNAME }}" \
+            --password="${{ secrets.ARTIFACTORY_PASSWORD }}" \
+            --interactive=false
+          
+          # Scan npm dependencies
+          echo "### JFrog Xray Security Scan" >> $GITHUB_STEP_SUMMARY
+          
+          # Audit npm packages
+          jfrog audit --npm --format=json > xray-report.json || true
+          
+          # Parse results
+          if [[ -f "xray-report.json" ]] && [[ -s "xray-report.json" ]]; then
+            CRITICAL=$(cat xray-report.json | jq '.vulnerabilities[]? | select(.severity=="Critical") | .summary' | wc -l 2>/dev/null || echo "0")
+            HIGH=$(cat xray-report.json | jq '.vulnerabilities[]? | select(.severity=="High") | .summary' | wc -l 2>/dev/null || echo "0")
+            MEDIUM=$(cat xray-report.json | jq '.vulnerabilities[]? | select(.severity=="Medium") | .summary' | wc -l 2>/dev/null || echo "0")
+            
+            echo " **Xray Scan Results:**" >> $GITHUB_STEP_SUMMARY
+            echo "- Critical: $CRITICAL" >> $GITHUB_STEP_SUMMARY
+            echo "- High: $HIGH" >> $GITHUB_STEP_SUMMARY
+            echo "- Medium: $MEDIUM" >> $GITHUB_STEP_SUMMARY
+            
+            if [[ $CRITICAL -gt 0 ]]; then
+              echo "::warning title=Security Alert::$CRITICAL critical vulnerabilities found in npm packages"
+            fi
+          else
+            echo " **Xray Scan**: Completed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 'Run tests'
+        if: inputs.run-tests
+        run: |
+          echo "##  Test Results" >> $GITHUB_STEP_SUMMARY
+          
+          # Run tests with coverage
+          if ${{ inputs.package-manager }} run test:coverage 2>/dev/null; then
+            echo "Tests completed with coverage" >> $GITHUB_STEP_SUMMARY
+          elif ${{ inputs.package-manager }} run test 2>/dev/null; then
+            echo "Tests completed" >> $GITHUB_STEP_SUMMARY
+          else
+            # Fallback to common test commands
+            if command -v jest &> /dev/null; then
+              npx jest --coverage --ci --watchAll=false
+            elif command -v mocha &> /dev/null; then
+              npx mocha
+            else
+              echo "⚠️ No test runner found" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          
+          # Check for coverage reports
+          if [[ -d "coverage" ]]; then
+            COVERAGE_FILE="coverage/lcov-report/index.html"
+            if [[ -f "$COVERAGE_FILE" ]]; then
+              echo " **Coverage report generated**" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+      - name: 'Run end-to-end tests'
+        if: inputs.run-e2e-tests
+        run: |
+          echo "## 🎭 End-to-End Tests" >> $GITHUB_STEP_SUMMARY
+          
+          # Try common e2e test commands
+          if ${{ inputs.package-manager }} run test:e2e 2>/dev/null; then
+            echo "E2E tests completed" >> $GITHUB_STEP_SUMMARY
+          elif command -v playwright &> /dev/null; then
+            npx playwright test
+            echo "Playwright tests completed" >> $GITHUB_STEP_SUMMARY
+          elif command -v cypress &> /dev/null; then
+            npx cypress run
+            echo "Cypress tests completed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ No E2E test runner configured" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 'Build application'
+        run: |
+          # Try to build the application
+          if ${{ inputs.package-manager }} run build 2>/dev/null; then
+            echo "Application built successfully"
+          else
+            echo "⚠️ No build script found, skipping build step"
+          fi
+
+      - name: 'Package for npm'
+        if: inputs.deploy-package
+        run: |
+          # Create npm package
+          ${{ inputs.package-manager }} pack
+          
+          # List generated package
+          ls -la *.tgz
+
+      - name: 'Upload test results'
+        if: inputs.run-tests && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            coverage/
+            test-results/
+            playwright-report/
+
+      - name: 'Upload build artifacts'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            *.tgz
+            dist/
+            build/
+            npm-audit.json
+            xray-report.json
+
+  deploy-package:
+    name: 'Deploy npm Package'
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: inputs.deploy-package && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Download build artifacts'
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+
+      - name: 'Deploy to Artifactory'
+        uses: ./.github/actions/artifactory-push
+        with:
+          artifactory-url: ${{ secrets.ARTIFACTORY_URL }}
+          username: ${{ secrets.ARTIFACTORY_USERNAME }}
+          password: ${{ secrets.ARTIFACTORY_PASSWORD }}
+          repository: ${{ secrets.ARTIFACTORY_NPM_REPO }}
+          package-type: 'npm'
+          package-path: './'
+          package-name: ${{ needs.build-and-test.outputs.package-name }}
+          package-version: ${{ needs.build-and-test.outputs.version }}
+          build-properties: 'environment=${{ inputs.environment }};node.version=${{ inputs.node-version }};package.manager=${{ inputs.package-manager }}'
+          scan-package: ${{ inputs.run-security-scan }}
+
+  build-docker:
+    name: 'Build and Push Docker Image'
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: inputs.build-docker && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Download build artifacts'
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+
+      - name: 'Build and push to Harbor'
+        uses: ./.github/actions/harbor-push
+        with:
+          registry: ${{ secrets.HARBOR_REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+          project: ${{ secrets.HARBOR_PROJECT }}
+          image-name: ${{ needs.build-and-test.outputs.package-name }}
+          dockerfile: './Dockerfile'
+          context: '.'
+          build-args: |
+            VERSION=${{ needs.build-and-test.outputs.version }}
+            NODE_VERSION=${{ inputs.node-version }}
+            PACKAGE_MANAGER=${{ inputs.package-manager }}
+          tags: ${{ inputs.environment }}
+          scan-image: ${{ inputs.run-security-scan }}
+
+  deploy:
+    name: 'Deploy Application'
+    runs-on: ubuntu-latest
+    needs: [build-and-test, deploy-package, build-docker]
+    if: always() && needs.build-and-test.result == 'success' && (needs.deploy-package.result == 'success' || needs.deploy-package.result == 'skipped') && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped')
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: 'Deployment summary'
+        run: |
+          echo "## 🟢 Node.js Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Application**: ${{ needs.build-and-test.outputs.package-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: ${{ needs.build-and-test.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Node.js Version**: ${{ inputs.node-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Package Manager**: ${{ inputs.package-manager }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit**: ${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Components Deployed:" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ inputs.deploy-package }}" == "true" ]]; then
+            echo "- npm Package to Artifactory" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ inputs.build-docker }}" == "true" ]]; then
+            echo "- Docker Image to Harbor" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -1,0 +1,267 @@
+---
+- name: Verify MinIO Installation and Configuration
+  hosts: storage
+  become: yes
+  vars_files:
+    - vars.yml
+    - vault.yml
+
+  tasks:
+    - name: Check if MinIO packages are installed
+      stat:
+        path: "{{ item }}"
+      register: minio_binaries
+      loop:
+        - "{{ minio_home }}/minio"
+        - "/usr/local/bin/minio"
+        - "{{ minio_home }}/mc"
+        - "/usr/local/bin/mc"
+
+    - name: Verify MinIO binaries installation
+      assert:
+        that:
+          - minio_binaries.results[0].stat.exists
+          - minio_binaries.results[1].stat.exists
+        fail_msg: "MinIO server binary is not installed correctly"
+        success_msg: "MinIO server binary is installed correctly"
+
+    - name: Verify MinIO client installation
+      assert:
+        that:
+          - minio_binaries.results[2].stat.exists
+          - minio_binaries.results[3].stat.exists
+        fail_msg: "MinIO client is not installed correctly"
+        success_msg: "MinIO client is installed correctly"
+      when: minio_client_enabled
+
+    - name: Check MinIO service status
+      service_facts:
+
+    - name: Verify MinIO service is running
+      assert:
+        that:
+          - ansible_facts.services['minio.service'].state == 'running'
+          - ansible_facts.services['minio.service'].status == 'enabled'
+        fail_msg: "MinIO service is not running or not enabled"
+        success_msg: "MinIO service is running and enabled"
+
+    - name: Test MinIO server connectivity
+      wait_for:
+        port: "{{ minio_port }}"
+        host: "{{ minio_bind_address }}"
+        timeout: 30
+      register: minio_server_connectivity
+
+    - name: Test MinIO console connectivity
+      wait_for:
+        port: "{{ minio_console_port }}"
+        host: "{{ minio_console_bind_address }}"
+        timeout: 30
+      register: minio_console_connectivity
+
+    - name: Verify MinIO connectivity
+      debug:
+        msg: "MinIO server and console are accessible"
+
+    - name: Test MinIO admin functionality
+      shell: mc admin info local
+      environment:
+        MC_HOST_local: "{{ minio_scheme }}://{{ minio_root_user }}:{{ minio_root_password }}@{{ minio_bind_address }}:{{ minio_port }}"
+      register: minio_admin_info
+      no_log: true
+      become_user: "{{ minio_user }}"
+      when: minio_client_enabled
+
+    - name: Display MinIO server information
+      debug:
+        msg: "{{ minio_admin_info.stdout_lines }}"
+      when: minio_client_enabled and minio_admin_info is defined
+
+    - name: Test MinIO bucket operations
+      shell: |
+        mc mb local/test-bucket --ignore-existing
+        echo "test content" | mc pipe local/test-bucket/test-file.txt
+        mc cat local/test-bucket/test-file.txt
+        mc rm local/test-bucket/test-file.txt
+        mc rb local/test-bucket
+      environment:
+        MC_HOST_local: "{{ minio_scheme }}://{{ minio_root_user }}:{{ minio_root_password }}@{{ minio_bind_address }}:{{ minio_port }}"
+      register: minio_bucket_test
+      no_log: true
+      become_user: "{{ minio_user }}"
+      when: minio_client_enabled
+
+    - name: Verify MinIO bucket operations
+      assert:
+        that:
+          - minio_bucket_test.rc == 0
+          - "'test content' in minio_bucket_test.stdout"
+        fail_msg: "MinIO bucket operations failed"
+        success_msg: "MinIO bucket operations working correctly"
+      when: minio_client_enabled
+
+    - name: Check default buckets
+      shell: mc ls local/
+      environment:
+        MC_HOST_local: "{{ minio_scheme }}://{{ minio_root_user }}:{{ minio_root_password }}@{{ minio_bind_address }}:{{ minio_port }}"
+      register: minio_buckets_list
+      no_log: true
+      become_user: "{{ minio_user }}"
+      when: minio_client_enabled
+
+    - name: Verify default buckets exist
+      assert:
+        that:
+          - item.name in minio_buckets_list.stdout
+        fail_msg: "Default bucket {{ item.name }} was not created"
+        success_msg: "Default bucket {{ item.name }} exists"
+      loop: "{{ minio_default_buckets }}"
+      when: minio_client_enabled
+
+    - name: Check MinIO directories
+      stat:
+        path: "{{ item }}"
+      register: minio_directories
+      loop:
+        - "{{ minio_home }}"
+        - "{{ minio_data_dir }}"
+        - "{{ minio_config_dir }}"
+        - "/var/log/minio"
+        - "{{ minio_backup_dir }}"
+
+    - name: Verify MinIO directories exist
+      assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+        fail_msg: "MinIO directory {{ item.item }} does not exist"
+        success_msg: "MinIO directory {{ item.item }} exists"
+      loop: "{{ minio_directories.results }}"
+
+    - name: Check MinIO configuration file
+      stat:
+        path: "{{ minio_config_dir }}/minio.env"
+      register: minio_config_file
+
+    - name: Verify MinIO configuration file exists
+      assert:
+        that:
+          - minio_config_file.stat.exists
+        fail_msg: "MinIO configuration file does not exist"
+        success_msg: "MinIO configuration file exists"
+
+    - name: Check MinIO backup script
+      stat:
+        path: "/usr/local/bin/minio-backup.sh"
+      register: minio_backup_script
+
+    - name: Verify MinIO backup script exists
+      assert:
+        that:
+          - minio_backup_script.stat.exists
+          - minio_backup_script.stat.executable
+        fail_msg: "MinIO backup script is not installed or not executable"
+        success_msg: "MinIO backup script is installed and executable"
+      when: minio_backup_enabled
+
+    - name: Check MinIO health check script
+      stat:
+        path: "/usr/local/bin/minio-health-check.sh"
+      register: minio_health_script
+
+    - name: Verify MinIO health check script exists
+      assert:
+        that:
+          - minio_health_script.stat.exists
+          - minio_health_script.stat.executable
+        fail_msg: "MinIO health check script is not installed or not executable"
+        success_msg: "MinIO health check script is installed and executable"
+      when: minio_health_check_enabled
+
+    - name: Check MinIO backup cron job
+      shell: crontab -l
+      register: minio_cron_jobs
+      failed_when: false
+
+    - name: Verify MinIO backup cron job
+      assert:
+        that:
+          - "'minio-backup.sh' in minio_cron_jobs.stdout"
+        fail_msg: "MinIO backup cron job is not configured"
+        success_msg: "MinIO backup cron job is configured"
+      when: minio_backup_enabled
+
+    - name: Check system limits for MinIO
+      shell: ulimit -n
+      become_user: "{{ minio_user }}"
+      register: minio_file_limits
+
+    - name: Verify system limits
+      debug:
+        msg: "MinIO file descriptor limit: {{ minio_file_limits.stdout }}"
+
+    - name: Check MinIO process
+      shell: pgrep -f minio
+      register: minio_process
+      failed_when: false
+
+    - name: Verify MinIO process is running
+      assert:
+        that:
+          - minio_process.rc == 0
+          - minio_process.stdout != ""
+        fail_msg: "MinIO process is not running"
+        success_msg: "MinIO process is running"
+
+    - name: Get MinIO memory usage
+      shell: ps -o pid,ppid,cmd,%mem,%cpu --sort=-%mem -C minio
+      register: minio_memory_usage
+      failed_when: false
+
+    - name: Display MinIO memory usage
+      debug:
+        msg: "{{ minio_memory_usage.stdout_lines }}"
+      when: minio_memory_usage.rc == 0
+
+    - name: Test MinIO health check script
+      shell: /usr/local/bin/minio-health-check.sh
+      register: minio_health_test
+      when: minio_health_check_enabled
+      failed_when: false
+
+    - name: Verify health check script execution
+      debug:
+        msg: "Health check result: {{ 'PASSED' if minio_health_test.rc == 0 else 'FAILED' }}"
+      when: minio_health_check_enabled
+
+    - name: Check firewall rules for MinIO
+      shell: ufw status | grep -E "{{ minio_port }}|{{ minio_console_port }}"
+      register: minio_firewall_rules
+      failed_when: false
+      when: minio_firewall_enabled
+
+    - name: Verify firewall rules
+      debug:
+        msg: "MinIO firewall rules are configured"
+      when: minio_firewall_enabled and minio_firewall_rules.rc == 0
+
+    - name: Display MinIO verification summary
+      debug:
+        msg: |
+          MinIO Verification Summary:
+          ===========================
+          ✓ Service Status: {{ 'Running' if ansible_facts.services['minio.service'].state == 'running' else 'Not Running' }}
+          ✓ Server Port: {{ 'Accessible' if minio_server_connectivity is succeeded else 'Not Accessible' }}
+          ✓ Console Port: {{ 'Accessible' if minio_console_connectivity is succeeded else 'Not Accessible' }}
+          ✓ Admin Interface: {{ 'Working' if minio_client_enabled and minio_admin_info.rc == 0 else 'Not Tested' }}
+          ✓ Bucket Operations: {{ 'Working' if minio_client_enabled and minio_bucket_test.rc == 0 else 'Not Tested' }}
+          ✓ Default Buckets: {{ minio_default_buckets | length }} created
+          ✓ Backup System: {{ 'Configured' if minio_backup_enabled else 'Disabled' }}
+          ✓ Health Monitoring: {{ 'Configured' if minio_health_check_enabled else 'Disabled' }}
+          ✓ Firewall: {{ 'Configured' if minio_firewall_enabled else 'Disabled' }}
+          
+          MinIO Server URL: {{ minio_scheme }}://{{ ansible_default_ipv4.address }}:{{ minio_port }}
+          MinIO Console URL: {{ minio_scheme }}://{{ ansible_default_ipv4.address }}:{{ minio_console_port }}
+          MinIO Version: {{ minio_version }}
+          
+          MinIO is ready for production use!

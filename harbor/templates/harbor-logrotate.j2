@@ -1,0 +1,12 @@
+/var/log/harbor/*.log {
+    weekly
+    missingok
+    rotate 52
+    compress
+    delaycompress
+    notifempty
+    create 644 root root
+    postrotate
+        systemctl reload harbor || true
+    endscript
+}

@@ -1,0 +1,276 @@
+---
+- name: Install and Configure Harbor Container Registry
+  hosts: registries
+  become: yes
+  gather_facts: yes
+  vars_files:
+    - vars.yml
+    - vault.yml
+
+  pre_tasks:
+    - name: Update package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      tags:
+        - preparation
+
+    - name: Install required system packages
+      apt:
+        name:
+          - curl
+          - wget
+          - unzip
+          - tar
+          - openssl
+          - ca-certificates
+          - gnupg
+          - lsb-release
+          - python3-pip
+          - python3-setuptools
+          - python3-docker
+        state: present
+      tags:
+        - preparation
+
+  tasks:
+    - name: Install Docker if not present
+      include_tasks: tasks/install-docker.yml
+      tags:
+        - docker
+
+    - name: Install Docker Compose if not present
+      include_tasks: tasks/install-docker-compose.yml
+      tags:
+        - docker-compose
+
+    - name: Create Harbor directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - "{{ harbor_install_dir }}"
+        - "{{ harbor_data_dir }}"
+        - "{{ harbor_config_dir }}"
+        - "{{ harbor_certs_dir }}"
+        - "{{ harbor_backup_dir }}"
+        - /var/log/harbor
+      tags:
+        - directories
+
+    - name: Download Harbor installer
+      get_url:
+        url: "{{ harbor_download_url }}"
+        dest: "/tmp/harbor-{{ harbor_version }}.tgz"
+        mode: '0644'
+        timeout: 300
+      tags:
+        - download
+
+    - name: Extract Harbor installer
+      unarchive:
+        src: "/tmp/harbor-{{ harbor_version }}.tgz"
+        dest: "{{ harbor_install_dir }}"
+        remote_src: yes
+        owner: root
+        group: root
+        creates: "{{ harbor_install_dir }}/harbor"
+      tags:
+        - extract
+
+    - name: Generate SSL certificates for Harbor
+      include_tasks: tasks/generate-ssl-certs.yml
+      when: harbor_ssl_enabled
+      tags:
+        - ssl
+
+    - name: Configure Harbor
+      template:
+        src: harbor.yml.j2
+        dest: "{{ harbor_install_dir }}/harbor/harbor.yml"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      notify:
+        - restart harbor
+      tags:
+        - configuration
+
+    - name: Configure Docker daemon for Harbor registry
+      template:
+        src: daemon.json.j2
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      notify:
+        - restart docker
+      tags:
+        - docker-config
+
+    - name: Create Harbor systemd service
+      template:
+        src: harbor.service.j2
+        dest: /etc/systemd/system/harbor.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify:
+        - reload systemd
+        - restart harbor
+      tags:
+        - systemd
+
+    - name: Create Harbor management scripts
+      template:
+        src: "{{ item }}.j2"
+        dest: "{{ harbor_install_dir }}/{{ item }}"
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - harbor-start.sh
+        - harbor-stop.sh
+        - harbor-backup.sh
+        - harbor-restore.sh
+      tags:
+        - scripts
+
+    - name: Configure logrotate for Harbor
+      template:
+        src: harbor-logrotate.j2
+        dest: /etc/logrotate.d/harbor
+        owner: root
+        group: root
+        mode: '0644'
+      tags:
+        - logging
+
+    - name: Configure firewall for Harbor
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop:
+        - "{{ harbor_http_port }}"
+        - "{{ harbor_https_port }}"
+      when: harbor_configure_firewall
+      tags:
+        - firewall
+
+    - name: Run Harbor installer
+      shell: |
+        cd {{ harbor_install_dir }}/harbor
+        ./install.sh {% if harbor_components %}--with-{{ harbor_components | join(' --with-') }}{% endif %}
+      args:
+        creates: "{{ harbor_install_dir }}/harbor/docker-compose.yml"
+      environment:
+        DOCKER_COMPOSE_VERSION: "{{ docker_compose_version }}"
+      tags:
+        - install
+
+    - name: Start Harbor services
+      systemd:
+        name: harbor
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      tags:
+        - service
+
+    - name: Wait for Harbor to be ready
+      uri:
+        url: "{{ harbor_base_url }}/api/v2.0/systeminfo"
+        method: GET
+        status_code: 200
+        timeout: 30
+        validate_certs: "{{ harbor_ssl_verify }}"
+      retries: 15
+      delay: 10
+      tags:
+        - health-check
+
+    - name: Create Harbor admin user password
+      uri:
+        url: "{{ harbor_base_url }}/api/v2.0/users/1/password"
+        method: PUT
+        body_format: json
+        body:
+          old_password: "{{ harbor_default_admin_password }}"
+          new_password: "{{ harbor_admin_password }}"
+        headers:
+          Authorization: "Basic {{ (harbor_admin_username + ':' + harbor_default_admin_password) | b64encode }}"
+        status_code: [200, 409]
+        validate_certs: "{{ harbor_ssl_verify }}"
+      when: harbor_admin_password != harbor_default_admin_password
+      tags:
+        - configuration
+
+    - name: Create Harbor projects
+      uri:
+        url: "{{ harbor_base_url }}/api/v2.0/projects"
+        method: POST
+        body_format: json
+        body:
+          project_name: "{{ item.name }}"
+          public: "{{ item.public | default(false) }}"
+          metadata:
+            auto_scan: "{{ item.auto_scan | default('true') }}"
+            severity: "{{ item.severity | default('low') }}"
+            reuse_sys_cve_allowlist: "{{ item.reuse_sys_cve_allowlist | default('true') }}"
+        headers:
+          Authorization: "Basic {{ (harbor_admin_username + ':' + harbor_admin_password) | b64encode }}"
+        status_code: [201, 409]
+        validate_certs: "{{ harbor_ssl_verify }}"
+      loop: "{{ harbor_projects }}"
+      when: harbor_projects is defined
+      tags:
+        - projects
+
+  handlers:
+    - name: update ca certificates
+      command: update-ca-certificates
+      become: yes
+
+    - name: restart docker
+      systemd:
+        name: docker
+        state: restarted
+
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: restart harbor
+      systemd:
+        name: harbor
+        state: restarted
+
+  post_tasks:
+    - name: Display Harbor access information
+      debug:
+        msg: |
+          Harbor installation completed successfully!
+          
+          Access Information:
+          ==================
+          Harbor URL: {{ harbor_base_url }}
+          Admin Username: {{ harbor_admin_username }}
+          Admin Password: {{ harbor_admin_password }}
+          
+          SSL Enabled: {{ harbor_ssl_enabled }}
+          Components: {{ harbor_components | join(', ') if harbor_components else 'Core only' }}
+          
+          Next Steps:
+          1. Access Harbor web interface at {{ harbor_base_url }}
+          2. Configure additional users and projects as needed
+          3. Configure container registries to use Harbor
+          4. Set up Harbor replication if needed
+      tags:
+        - info
+

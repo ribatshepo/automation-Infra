@@ -1,0 +1,2 @@
+[Service]
+Environment="KUBELET_EXTRA_ARGS=--node-ip={{ ansible_default_ipv4.address }} --max-pods={{ node_max_pods }}"

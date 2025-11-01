@@ -1,0 +1,137 @@
+---
+# Comprehensive health check for JFrog Artifactory deployment
+- name: Health Check - Service Status
+  systemd:
+    name: artifactory
+    state: started
+  register: service_health
+
+- name: Health Check - Port Accessibility
+  wait_for:
+    port: 8081
+    host: localhost
+    timeout: 10
+  register: port_health
+
+- name: Health Check - API Ping
+  uri:
+    url: "http://localhost:8081/artifactory/api/system/ping"
+    method: GET
+    status_code: 200
+  register: api_health
+  ignore_errors: yes
+
+- name: Health Check - UI Access
+  uri:
+    url: "http://localhost:8081/ui/login"
+    method: GET
+    status_code: 200
+  register: ui_health
+  ignore_errors: yes
+
+- name: Health Check - Admin Authentication
+  uri:
+    url: "http://localhost:8081/artifactory/api/security/users/admin"
+    method: GET
+    user: admin
+    password: "{{ vault_artifactory_admin_password }}"
+    force_basic_auth: yes
+    status_code: 200
+  register: auth_health
+  ignore_errors: yes
+
+- name: Health Check - Database Connectivity
+  postgresql_query:
+    login_host: localhost
+    login_user: "{{ vault_artifactory_db_user }}"
+    login_password: "{{ vault_artifactory_db_password }}"
+    db: "{{ artifactory_db_name }}"
+    query: "SELECT version()"
+  register: db_health
+  ignore_errors: yes
+
+- name: Health Check - Storage Space
+  shell: "df -h {{ artifactory_data_dir }} | tail -1"
+  register: storage_health
+
+- name: Health Check - Memory Usage
+  shell: "free -h | grep Mem"
+  register: memory_health
+
+- name: Health Check - Process Count
+  shell: "ps aux | grep -E '(artifactory|java)' | grep -v grep | wc -l"
+  register: process_health
+
+- name: Display Comprehensive Health Report
+  debug:
+    msg: |
+      ================================
+      JFROG ARTIFACTORY HEALTH REPORT
+      ================================
+      
+      SERVICE STATUS:
+      - Service State: {{ 'HEALTHY' if service_health.status.ActiveState == 'active' else 'UNHEALTHY' }}
+      - Service Sub-State: {{ service_health.status.SubState | default('unknown') }}
+      
+      NETWORK & ACCESS:
+      - Port 8081: {{ 'ACCESSIBLE' if port_health is succeeded else 'BLOCKED' }}
+      - API Endpoint: {{ 'WORKING' if api_health.status == 200 else 'FAILED' }}
+      - UI Interface: {{ 'WORKING' if ui_health.status == 200 else 'FAILED' }}
+      
+      AUTHENTICATION:
+      - Admin Login: {{ 'WORKING' if auth_health.status == 200 else 'FAILED' }}
+      - Admin User: admin
+      - Password: {{ vault_artifactory_admin_password }}
+      
+      DATABASE:
+      - PostgreSQL: {{ 'CONNECTED' if db_health is succeeded else 'DISCONNECTED' }}
+      - Database Name: {{ artifactory_db_name }}
+      - Database User: {{ vault_artifactory_db_user }}
+      
+      RESOURCES:
+      - Storage: {{ storage_health.stdout }}
+      - Memory: {{ memory_health.stdout }}
+      - Java Processes: {{ process_health.stdout }}
+      
+      ACCESS INFORMATION:
+      - UI URL: http://{{ ansible_default_ipv4.address }}:8081/ui/
+      - API URL: http://{{ ansible_default_ipv4.address }}:8081/artifactory/api/
+      
+      ================================
+
+- name: Save health report to file
+  copy:
+    content: |
+      JFrog Artifactory Health Report
+      Generated: {{ ansible_date_time.iso8601 }}
+      Host: {{ inventory_hostname }}
+      
+      Service Status: {{ service_health.status.ActiveState }}
+      Port 8081: {{ 'OK' if port_health is succeeded else 'FAIL' }}
+      API Health: {{ 'OK' if api_health.status == 200 else 'FAIL' }}
+      UI Health: {{ 'OK' if ui_health.status == 200 else 'FAIL' }}
+      Auth Health: {{ 'OK' if auth_health.status == 200 else 'FAIL' }}
+      DB Health: {{ 'OK' if db_health is succeeded else 'FAIL' }}
+      
+      Access Information:
+      UI: http://{{ ansible_default_ipv4.address }}:8081/ui/
+      API: http://{{ ansible_default_ipv4.address }}:8081/artifactory/api/
+      Username: admin
+      Password: {{ vault_artifactory_admin_password }}
+    dest: "{{ artifactory_data_dir }}/health-report.txt"
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+    mode: '0600'
+
+- name: Final deployment status
+  debug:
+    msg: |
+      DEPLOYMENT {{ 'SUCCESSFUL' if (service_health.status.ActiveState == 'active' and port_health is succeeded and api_health.status == 200) else 'NEEDS ATTENTION' }}!
+      
+      {% if service_health.status.ActiveState == 'active' and port_health is succeeded and api_health.status == 200 %}
+      JFrog Artifactory is ready for use!
+      Access the UI at: http://{{ ansible_default_ipv4.address }}:8081/ui/
+      Login with: admin / {{ vault_artifactory_admin_password }}
+      {% else %}
+      Some components need attention. Check the health report above.
+      {% endif %}

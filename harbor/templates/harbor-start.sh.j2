@@ -1,0 +1,21 @@
+#!/bin/bash
+# Harbor Start Script
+
+set -e
+
+cd {{ harbor_install_dir }}/harbor
+
+echo "Starting Harbor services..."
+docker-compose up -d
+
+echo "Waiting for Harbor to be ready..."
+sleep 30
+
+# Check if Harbor is responding
+if curl -k -s {{ harbor_base_url }}/api/v2.0/systeminfo > /dev/null; then
+    echo "Harbor is running successfully"
+    exit 0
+else
+    echo "Harbor failed to start properly"
+    exit 1
+fi

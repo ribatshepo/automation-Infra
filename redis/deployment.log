@@ -1,0 +1,712 @@
+[2025-10-31 23:04:43] Redis Deployment Starting...
+[2025-10-31 23:04:43] Service Type: redis
+[2025-10-31 23:04:43] Vault Mode: deploy-vault
+[2025-10-31 23:04:43] Checking prerequisites...
+[0;32m[SUCCESS][0m Ansible is installed: ansible [core 2.16.3]
+[2025-10-31 23:04:43] Testing SSH connectivity to Redis hosts...
+[0;32m[SUCCESS][0m Redis hosts are reachable via SSH
+[2025-10-31 23:04:45] Starting Redis deployment...
+[2025-10-31 23:04:45] Service Type: redis
+[2025-10-31 23:04:45] Vault Mode: deploy-vault
+[2025-10-31 23:04:45] Executing: ansible-playbook -i /home/tshepo/ansible-infra/inventory.yml install-redis.yml --ask-vault-pass --ask-become-pass
+
+PLAY [Install and Configure Redis Server] **************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-1]
+
+TASK [Update apt package cache] ************************************************
+changed: [redis-1]
+
+TASK [Install required packages for Redis] *************************************
+changed: [redis-1]
+
+TASK [Add Redis GPG key] *******************************************************
+fatal: [redis-1]: FAILED! => {"changed": false, "msg": "Failed to download key at https://download.redis.io/redis-stable/utils/redis_key.gpg: HTTP Error 404: Not Found"}
+
+PLAY RECAP *********************************************************************
+redis-1                    : ok=3    changed=2    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+
+[0;31m[ERROR][0m redis deployment failed
+[2025-10-31 23:07:13] Redis Deployment Starting...
+[2025-10-31 23:07:13] Service Type: redis
+[2025-10-31 23:07:13] Vault Mode: deploy-vault
+[2025-10-31 23:07:13] Checking prerequisites...
+[0;32m[SUCCESS][0m Ansible is installed: ansible [core 2.16.3]
+[2025-10-31 23:07:14] Testing SSH connectivity to Redis hosts...
+[0;32m[SUCCESS][0m Redis hosts are reachable via SSH
+[2025-10-31 23:07:15] Starting Redis deployment...
+[2025-10-31 23:07:15] Service Type: redis
+[2025-10-31 23:07:15] Vault Mode: deploy-vault
+[2025-10-31 23:07:15] Executing: ansible-playbook -i /home/tshepo/ansible-infra/inventory.yml install-redis.yml --ask-vault-pass --ask-become-pass
+
+PLAY [Install and Configure Redis Server] **************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-1]
+
+TASK [Update apt package cache] ************************************************
+ok: [redis-1]
+
+TASK [Install required packages for Redis] *************************************
+ok: [redis-1]
+
+TASK [Install Redis from Ubuntu repositories] **********************************
+changed: [redis-1]
+
+TASK [Create Redis system user and group] **************************************
+changed: [redis-1]
+
+TASK [Create Redis configuration directories] **********************************
+changed: [redis-1] => (item=/etc/redis)
+changed: [redis-1] => (item=/var/lib/redis)
+changed: [redis-1] => (item=/var/log/redis)
+changed: [redis-1] => (item=/run/redis)
+
+TASK [Configure Redis main configuration] **************************************
+changed: [redis-1]
+
+TASK [Create Redis systemd service override directory] *************************
+changed: [redis-1]
+
+TASK [Configure Redis systemd service override] ********************************
+changed: [redis-1]
+
+TASK [Configure Redis log rotation] ********************************************
+changed: [redis-1]
+
+TASK [Set Redis memory overcommit settings] ************************************
+changed: [redis-1] => (item={'name': 'vm.overcommit_memory', 'value': '1'})
+changed: [redis-1] => (item={'name': 'net.core.somaxconn', 'value': '65535'})
+
+TASK [Disable transparent huge pages for Redis] ********************************
+changed: [redis-1]
+
+TASK [Create Redis authentication configuration] *******************************
+changed: [redis-1]
+
+TASK [Ensure Redis service is running and enabled] *****************************
+fatal: [redis-1]: FAILED! => {"changed": false, "msg": "Error loading unit file 'redis-server': org.freedesktop.systemd1.BadUnitSetting \"Unit redis-server.service has a bad unit file setting.\""}
+
+PLAY RECAP *********************************************************************
+redis-1                    : ok=13   changed=10   unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+
+[0;31m[ERROR][0m redis deployment failed
+[2025-10-31 23:08:39] Redis Deployment Starting...
+[2025-10-31 23:08:39] Service Type: redis
+[2025-10-31 23:08:39] Vault Mode: deploy-vault
+[2025-10-31 23:08:39] Checking prerequisites...
+[0;32m[SUCCESS][0m Ansible is installed: ansible [core 2.16.3]
+[2025-10-31 23:08:39] Testing SSH connectivity to Redis hosts...
+[0;32m[SUCCESS][0m Redis hosts are reachable via SSH
+[2025-10-31 23:08:40] Starting Redis deployment...
+[2025-10-31 23:08:40] Service Type: redis
+[2025-10-31 23:08:40] Vault Mode: deploy-vault
+[2025-10-31 23:08:40] Executing: ansible-playbook -i /home/tshepo/ansible-infra/inventory.yml install-redis.yml --ask-vault-pass --ask-become-pass
+
+PLAY [Install and Configure Redis Server] **************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-1]
+
+TASK [Update apt package cache] ************************************************
+ok: [redis-1]
+
+TASK [Install required packages for Redis] *************************************
+ok: [redis-1]
+
+TASK [Install Redis from Ubuntu repositories] **********************************
+ok: [redis-1]
+
+TASK [Create Redis system user and group] **************************************
+ok: [redis-1]
+
+TASK [Create Redis configuration directories] **********************************
+ok: [redis-1] => (item=/etc/redis)
+ok: [redis-1] => (item=/var/lib/redis)
+ok: [redis-1] => (item=/var/log/redis)
+ok: [redis-1] => (item=/run/redis)
+
+TASK [Configure Redis main configuration] **************************************
+changed: [redis-1]
+
+TASK [Create Redis systemd service override directory] *************************
+ok: [redis-1]
+
+TASK [Stop default Redis service] **********************************************
+fatal: [redis-1]: FAILED! => {"changed": false, "msg": "Error loading unit file 'redis-server': org.freedesktop.systemd1.BadUnitSetting \"Unit redis-server.service has a bad unit file setting.\""}
+
+PLAY RECAP *********************************************************************
+redis-1                    : ok=8    changed=1    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+
+[0;31m[ERROR][0m redis deployment failed
+[2025-10-31 23:09:59] Redis Deployment Starting...
+[2025-10-31 23:09:59] Service Type: redis
+[2025-10-31 23:09:59] Vault Mode: deploy-vault
+[2025-10-31 23:09:59] Checking prerequisites...
+[0;32m[SUCCESS][0m Ansible is installed: ansible [core 2.16.3]
+[2025-10-31 23:10:00] Testing SSH connectivity to Redis hosts...
+[0;32m[SUCCESS][0m Redis hosts are reachable via SSH
+[2025-10-31 23:10:01] Starting Redis deployment...
+[2025-10-31 23:10:01] Service Type: redis
+[2025-10-31 23:10:01] Vault Mode: deploy-vault
+[2025-10-31 23:10:01] Executing: ansible-playbook -i /home/tshepo/ansible-infra/inventory.yml install-redis.yml --ask-vault-pass --ask-become-pass
+
+PLAY [Install and Configure Redis Server] **************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-1]
+
+TASK [Update apt package cache] ************************************************
+ok: [redis-1]
+
+TASK [Install required packages for Redis] *************************************
+ok: [redis-1]
+
+TASK [Install Redis from Ubuntu repositories] **********************************
+ok: [redis-1]
+
+TASK [Create Redis system user and group] **************************************
+ok: [redis-1]
+
+TASK [Create Redis configuration directories] **********************************
+ok: [redis-1] => (item=/etc/redis)
+ok: [redis-1] => (item=/var/lib/redis)
+ok: [redis-1] => (item=/var/log/redis)
+ok: [redis-1] => (item=/run/redis)
+
+TASK [Configure Redis main settings] *******************************************
+ok: [redis-1] => (item={'key': 'bind', 'value': '127.0.0.1'})
+ok: [redis-1] => (item={'key': 'port', 'value': '6379'})
+ok: [redis-1] => (item={'key': 'dir', 'value': '/var/lib/redis'})
+ok: [redis-1] => (item={'key': 'logfile', 'value': '/var/log/redis/redis-server.log'})
+ok: [redis-1] => (item={'key': 'daemonize', 'value': 'yes'})
+changed: [redis-1] => (item={'key': 'supervised', 'value': 'systemd'})
+
+TASK [Ensure Redis service is stopped initially] *******************************
+fatal: [redis-1]: FAILED! => {"changed": false, "msg": "Error loading unit file 'redis-server': org.freedesktop.systemd1.BadUnitSetting \"Unit redis-server.service has a bad unit file setting.\""}
+...ignoring
+
+TASK [Remove existing Redis systemd override if present] ***********************
+changed: [redis-1]
+
+TASK [Reload systemd daemon] ***************************************************
+ok: [redis-1]
+
+TASK [Configure Redis log rotation] ********************************************
+ok: [redis-1]
+
+TASK [Set Redis memory overcommit settings] ************************************
+ok: [redis-1] => (item={'name': 'vm.overcommit_memory', 'value': '1'})
+ok: [redis-1] => (item={'name': 'net.core.somaxconn', 'value': '65535'})
+
+TASK [Disable transparent huge pages for Redis] ********************************
+ok: [redis-1]
+
+TASK [Create Redis authentication configuration] *******************************
+ok: [redis-1]
+
+TASK [Ensure Redis service is running and enabled] *****************************
+ok: [redis-1]
+
+TASK [Wait for Redis to be ready] **********************************************
+ok: [redis-1]
+
+TASK [Test Redis connection (with auth)] ***************************************
+changed: [redis-1]
+
+TASK [Test Redis connection (without auth)] ************************************
+skipping: [redis-1]
+
+TASK [Create Redis backup directory] *******************************************
+changed: [redis-1]
+
+TASK [Create Redis backup script] **********************************************
+changed: [redis-1]
+
+TASK [Create Redis backup cron job] ********************************************
+changed: [redis-1]
+
+TASK [Display Redis status information] ****************************************
+fatal: [redis-1]: FAILED! => {"msg": "The task includes an option with an undefined variable. The error was: 'dict object' has no attribute 'services'. 'dict object' has no attribute 'services'\n\nThe error appears to be in '/home/tshepo/ansible-infra/redis/install-redis.yml': line 299, column 7, but may\nbe elsewhere in the file depending on the exact syntax problem.\n\nThe offending line appears to be:\n\n\n    - name: Display Redis status information\n      ^ here\n"}
+
+PLAY RECAP *********************************************************************
+redis-1                    : ok=20   changed=6    unreachable=0    failed=1    skipped=1    rescued=0    ignored=1   
+
+[0;31m[ERROR][0m redis deployment failed
+[2025-10-31 23:10:54] Redis Deployment Starting...
+[2025-10-31 23:10:54] Service Type: redis
+[2025-10-31 23:10:54] Vault Mode: deploy-vault
+[2025-10-31 23:10:54] Checking prerequisites...
+[0;32m[SUCCESS][0m Ansible is installed: ansible [core 2.16.3]
+[2025-10-31 23:10:54] Testing SSH connectivity to Redis hosts...
+[0;32m[SUCCESS][0m Redis hosts are reachable via SSH
+[2025-10-31 23:10:55] Starting Redis deployment...
+[2025-10-31 23:10:55] Service Type: redis
+[2025-10-31 23:10:55] Vault Mode: deploy-vault
+[2025-10-31 23:10:55] Executing: ansible-playbook -i /home/tshepo/ansible-infra/inventory.yml install-redis.yml --ask-vault-pass --ask-become-pass
+
+PLAY [Install and Configure Redis Server] **************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-1]
+
+TASK [Update apt package cache] ************************************************
+ok: [redis-1]
+
+TASK [Install required packages for Redis] *************************************
+ok: [redis-1]
+
+TASK [Install Redis from Ubuntu repositories] **********************************
+ok: [redis-1]
+
+TASK [Create Redis system user and group] **************************************
+ok: [redis-1]
+
+TASK [Create Redis configuration directories] **********************************
+ok: [redis-1] => (item=/etc/redis)
+ok: [redis-1] => (item=/var/lib/redis)
+ok: [redis-1] => (item=/var/log/redis)
+ok: [redis-1] => (item=/run/redis)
+
+TASK [Configure Redis main settings] *******************************************
+ok: [redis-1] => (item={'key': 'bind', 'value': '127.0.0.1'})
+ok: [redis-1] => (item={'key': 'port', 'value': '6379'})
+ok: [redis-1] => (item={'key': 'dir', 'value': '/var/lib/redis'})
+ok: [redis-1] => (item={'key': 'logfile', 'value': '/var/log/redis/redis-server.log'})
+ok: [redis-1] => (item={'key': 'daemonize', 'value': 'yes'})
+ok: [redis-1] => (item={'key': 'supervised', 'value': 'systemd'})
+
+TASK [Ensure Redis service is stopped initially] *******************************
+changed: [redis-1]
+
+TASK [Remove existing Redis systemd override if present] ***********************
+ok: [redis-1]
+
+TASK [Reload systemd daemon] ***************************************************
+ok: [redis-1]
+
+TASK [Configure Redis log rotation] ********************************************
+ok: [redis-1]
+
+TASK [Set Redis memory overcommit settings] ************************************
+ok: [redis-1] => (item={'name': 'vm.overcommit_memory', 'value': '1'})
+ok: [redis-1] => (item={'name': 'net.core.somaxconn', 'value': '65535'})
+
+TASK [Disable transparent huge pages for Redis] ********************************
+ok: [redis-1]
+
+TASK [Create Redis authentication configuration] *******************************
+ok: [redis-1]
+
+TASK [Ensure Redis service is running and enabled] *****************************
+fatal: [redis-1]: FAILED! => {"changed": false, "msg": "Unable to start service redis-server: Job for redis-server.service failed because the control process exited with error code.\nSee \"systemctl status redis-server.service\" and \"journalctl -xeu redis-server.service\" for details.\n"}
+
+PLAY RECAP *********************************************************************
+redis-1                    : ok=14   changed=1    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+
+[0;31m[ERROR][0m redis deployment failed
+[2025-10-31 23:16:39] Redis Deployment Starting...
+[2025-10-31 23:16:39] Service Type: redis
+[2025-10-31 23:16:39] Vault Mode: deploy-vault
+[2025-10-31 23:16:39] Checking prerequisites...
+[0;32m[SUCCESS][0m Ansible is installed: ansible [core 2.16.3]
+[2025-10-31 23:16:39] Testing SSH connectivity to Redis hosts...
+[0;32m[SUCCESS][0m Redis hosts are reachable via SSH
+[2025-10-31 23:16:40] Starting Redis deployment...
+[2025-10-31 23:16:40] Service Type: redis
+[2025-10-31 23:16:40] Vault Mode: deploy-vault
+[2025-10-31 23:16:40] Executing: ansible-playbook -i /home/tshepo/ansible-infra/inventory.yml install-redis.yml --ask-vault-pass --ask-become-pass
+
+PLAY [Install and Configure Redis Server] **************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-1]
+
+TASK [Update apt package cache] ************************************************
+ok: [redis-1]
+
+TASK [Install required packages for Redis] *************************************
+ok: [redis-1]
+
+TASK [Install Redis from Ubuntu repositories] **********************************
+ok: [redis-1]
+
+TASK [Create Redis system user and group] **************************************
+ok: [redis-1]
+
+TASK [Create Redis configuration directories] **********************************
+ok: [redis-1] => (item=/etc/redis)
+ok: [redis-1] => (item=/var/lib/redis)
+ok: [redis-1] => (item=/var/log/redis)
+changed: [redis-1] => (item=/run/redis)
+
+TASK [Configure Redis main settings] *******************************************
+ok: [redis-1] => (item={'key': 'bind', 'value': '127.0.0.1'})
+ok: [redis-1] => (item={'key': 'port', 'value': '6379'})
+ok: [redis-1] => (item={'key': 'dir', 'value': '/var/lib/redis'})
+ok: [redis-1] => (item={'key': 'logfile', 'value': '/var/log/redis/redis-server.log'})
+ok: [redis-1] => (item={'key': 'daemonize', 'value': 'yes'})
+ok: [redis-1] => (item={'key': 'supervised', 'value': 'systemd'})
+
+TASK [Disable ACL file temporarily] ********************************************
+changed: [redis-1]
+
+TASK [Ensure Redis service is stopped initially] *******************************
+changed: [redis-1]
+
+TASK [Remove existing Redis systemd override if present] ***********************
+ok: [redis-1]
+
+TASK [Reload systemd daemon] ***************************************************
+ok: [redis-1]
+
+TASK [Configure Redis log rotation] ********************************************
+ok: [redis-1]
+
+TASK [Set Redis memory overcommit settings] ************************************
+ok: [redis-1] => (item={'name': 'vm.overcommit_memory', 'value': '1'})
+ok: [redis-1] => (item={'name': 'net.core.somaxconn', 'value': '65535'})
+
+TASK [Disable transparent huge pages for Redis] ********************************
+ok: [redis-1]
+
+TASK [Create Redis authentication configuration] *******************************
+skipping: [redis-1]
+
+TASK [Ensure Redis service is running and enabled] *****************************
+changed: [redis-1]
+
+TASK [Wait for Redis to be ready] **********************************************
+ok: [redis-1]
+
+TASK [Test Redis connection (with auth)] ***************************************
+changed: [redis-1]
+
+TASK [Test Redis connection (without auth)] ************************************
+skipping: [redis-1]
+
+TASK [Create Redis backup directory] *******************************************
+ok: [redis-1]
+
+TASK [Create Redis backup script] **********************************************
+ok: [redis-1]
+
+TASK [Create Redis backup cron job] ********************************************
+ok: [redis-1]
+
+TASK [Get service facts] *******************************************************
+ok: [redis-1]
+
+TASK [Display Redis status information] ****************************************
+ok: [redis-1] => {
+    "msg": "Redis Status:\n- Service Status: running\n- Service Enabled: enabled\n- Bind Address: 127.0.0.1\n- Port: 6379\n- Authentication: Enabled\n- Connection Test: PONG\n"
+}
+
+RUNNING HANDLER [restart redis] ************************************************
+changed: [redis-1]
+
+PLAY RECAP *********************************************************************
+redis-1                    : ok=23   changed=6    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+
+[0;32m[SUCCESS][0m redis deployed successfully
+[2025-10-31 23:17:14] Verifying Redis installation...
+
+PLAY [Verify Redis Installation and Configuration] *****************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-1]
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-1]
+
+TASK [Determine which Redis service to verify] *********************************
+ok: [redis-1]
+
+TASK [Check if Redis packages are installed] ***********************************
+ok: [redis-1]
+
+TASK [Verify Redis packages installation] **************************************
+ok: [redis-1] => {
+    "changed": false,
+    "msg": "Redis packages are installed correctly"
+}
+
+TASK [Check Redis service status] **********************************************
+ok: [redis-1]
+
+TASK [Verify Redis service is running] *****************************************
+ok: [redis-1] => {
+    "changed": false,
+    "msg": "Redis service is running and enabled"
+}
+
+TASK [Test Redis connection with authentication] *******************************
+changed: [redis-1]
+
+TASK [Test Redis connection without authentication] ****************************
+skipping: [redis-1]
+
+TASK [Verify Redis is accepting connections] ***********************************
+ok: [redis-1] => {
+    "changed": false,
+    "msg": "Redis is accepting connections"
+}
+
+TASK [Get Redis version] *******************************************************
+changed: [redis-1]
+
+TASK [Display Redis version] ***************************************************
+ok: [redis-1] => {
+    "msg": "Redis Version: redis_version:7.0.15"
+}
+
+TASK [Get Redis info] **********************************************************
+changed: [redis-1]
+
+TASK [Test Redis basic operations] *********************************************
+changed: [redis-1]
+
+TASK [Verify Redis basic operations] *******************************************
+ok: [redis-1] => {
+    "changed": false,
+    "msg": "Redis basic operations working"
+}
+
+TASK [Check if Redis Stack modules are available (Redis Stack only)] ***********
+skipping: [redis-1]
+
+TASK [Test RedisJSON module (Redis Stack only)] ********************************
+skipping: [redis-1]
+
+TASK [Test RediSearch module (Redis Stack only)] *******************************
+skipping: [redis-1]
+
+TASK [Verify Redis Stack modules working (Redis Stack only)] *******************
+skipping: [redis-1]
+
+TASK [Check Redis configuration files] *****************************************
+ok: [redis-1] => (item=/etc/redis/redis.conf)
+ok: [redis-1] => (item=/etc/redis/users.acl)
+ok: [redis-1] => (item=/etc/redis-stack/redis-stack.conf)
+ok: [redis-1] => (item=/etc/redis-stack/users.acl)
+
+TASK [Verify Redis configuration files exist] **********************************
+ok: [redis-1] => {
+    "changed": false,
+    "msg": "Redis configuration files exist"
+}
+
+TASK [Check Redis is listening on correct port] ********************************
+ok: [redis-1]
+
+TASK [Check Redis data directory] **********************************************
+ok: [redis-1]
+
+TASK [Verify Redis data directory exists] **************************************
+ok: [redis-1] => {
+    "changed": false,
+    "msg": "Redis data directory exists"
+}
+
+TASK [Check Redis log directory] ***********************************************
+ok: [redis-1]
+
+TASK [Check backup directory] **************************************************
+ok: [redis-1]
+
+TASK [Check backup script] *****************************************************
+ok: [redis-1]
+
+TASK [Verify backup setup] *****************************************************
+ok: [redis-1] => {
+    "changed": false,
+    "msg": "Backup setup is properly configured"
+}
+
+TASK [Check Redis process] *****************************************************
+ok: [redis-1]
+
+TASK [Display Redis processes] *************************************************
+ok: [redis-1] => {
+    "msg": "Redis processes running: 1"
+}
+
+TASK [Get Redis memory usage] **************************************************
+changed: [redis-1]
+
+TASK [Get Redis connected clients] *********************************************
+changed: [redis-1]
+
+TASK [Get Redis key count] *****************************************************
+changed: [redis-1]
+
+TASK [Test Redis persistence] **************************************************
+changed: [redis-1]
+
+TASK [Verify Redis persistence is working] *************************************
+ok: [redis-1] => {
+    "changed": false,
+    "msg": "Redis persistence is working"
+}
+
+TASK [Create comprehensive status report] **************************************
+ok: [redis-1] => {
+    "msg": "===========================================\nRedis Status Report for redis-1\n===========================================\nService Type: REDIS\nService Status: Running\nService Enabled: Yes\nVersion: redis_version:7.0.15\nHost: 127.0.0.1\nPort: 6379\nAuthentication: Enabled\nMemory Usage: used_memory_human:1.04M\nConnected Clients: connected_clients:1\nKeyspace Info: # Keyspace\nBackup Setup: Configured\n===========================================\n"
+}
+
+TASK [Final verification success message] **************************************
+ok: [redis-1] => {
+    "msg": "REDIS verification completed successfully! All components are operational."
+}
+
+PLAY RECAP *********************************************************************
+redis-1                    : ok=32   changed=8    unreachable=0    failed=0    skipped=5    rescued=0    ignored=0   
+
+[0;32m[SUCCESS][0m Redis verification completed successfully
+
+======================================
+Redis Deployment Summary
+======================================
+✓ Redis server installed
+
+
+
+
+
+✓ Security configured with authentication
+✓ Performance tuning applied
+✓ Backup system configured
+✓ Log rotation configured
+✓ Service monitoring enabled
+
+Connection details:
+  Host: Check inventory.yml
+  Port: 6379
+  Authentication: Enabled (use configured users)
+
+Next steps:
+1. Test connection: redis-cli -h <host> -p 6379 -a <password> ping
+2. Configure application connection strings
+3. Set up monitoring and alerting
+4. Review backup schedule
+======================================
+[2025-10-31 23:17:46] Redis deployment process completed.
+[2025-10-31 23:19:23] Redis Deployment Starting...
+[2025-10-31 23:19:23] Service Type: redis-stack
+[2025-10-31 23:19:23] Vault Mode: deploy-vault
+[2025-10-31 23:19:23] Checking prerequisites...
+[0;32m[SUCCESS][0m Ansible is installed: ansible [core 2.16.3]
+[2025-10-31 23:19:23] Testing SSH connectivity to Redis hosts...
+[0;32m[SUCCESS][0m Redis hosts are reachable via SSH
+[2025-10-31 23:19:24] Starting Redis deployment...
+[2025-10-31 23:19:24] Service Type: redis-stack
+[2025-10-31 23:19:24] Vault Mode: deploy-vault
+[2025-10-31 23:19:24] Executing: ansible-playbook -i /home/tshepo/ansible-infra/inventory.yml install-redis-stack.yml --ask-vault-pass --ask-become-pass
+
+PLAY [Install and Configure Redis Stack] ***************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-1]
+
+TASK [Update apt package cache] ************************************************
+ok: [redis-1]
+
+TASK [Install required packages for Redis Stack] *******************************
+ok: [redis-1]
+
+TASK [Add Redis Labs GPG key for Redis Stack] **********************************
+changed: [redis-1]
+
+TASK [Add Redis Labs repository for Redis Stack] *******************************
+changed: [redis-1]
+
+TASK [Install Redis Stack server] **********************************************
+fatal: [redis-1]: FAILED! => {"changed": false, "msg": "No package matching 'redis-stack-server' is available"}
+...ignoring
+
+TASK [Install Redis with additional modules (fallback)] ************************
+ok: [redis-1]
+
+TASK [Set fact for Redis Stack availability] ***********************************
+ok: [redis-1]
+
+TASK [Create Redis Stack system user and group] ********************************
+fatal: [redis-1]: FAILED! => {"changed": false, "msg": "Group redis-stack does not exist"}
+
+PLAY RECAP *********************************************************************
+redis-1                    : ok=8    changed=2    unreachable=0    failed=1    skipped=0    rescued=0    ignored=1   
+
+[0;31m[ERROR][0m redis-stack deployment failed
+[2025-10-31 23:22:43] Redis Deployment Starting...
+[2025-10-31 23:22:43] Service Type: redis-stack
+[2025-10-31 23:22:43] Vault Mode: deploy-vault
+[2025-10-31 23:22:43] Checking prerequisites...
+[0;32m[SUCCESS][0m Ansible is installed: ansible [core 2.16.3]
+[2025-10-31 23:22:43] Testing SSH connectivity to Redis hosts...
+[0;32m[SUCCESS][0m Redis hosts are reachable via SSH
+[2025-10-31 23:22:45] Starting Redis deployment...
+[2025-10-31 23:22:45] Service Type: redis-stack
+[2025-10-31 23:22:45] Vault Mode: deploy-vault
+[2025-10-31 23:22:45] Executing: ansible-playbook -i /home/tshepo/ansible-infra/inventory.yml install-redis-stack.yml --ask-vault-pass --ask-become-pass
+
+PLAY [Install and Configure Redis Stack] ***************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-1]
+
+TASK [Update apt package cache] ************************************************
+ok: [redis-1]
+
+TASK [Install required packages for Redis Stack] *******************************
+ok: [redis-1]
+
+TASK [Add Redis Labs GPG key for Redis Stack] **********************************
+ok: [redis-1]
+
+TASK [Add Redis Labs repository for Redis Stack] *******************************
+ok: [redis-1]
+
+TASK [Install Redis Stack server] **********************************************
+fatal: [redis-1]: FAILED! => {"changed": false, "msg": "No package matching 'redis-stack-server' is available"}
+...ignoring
+
+TASK [Install Redis with additional modules (fallback)] ************************
+ok: [redis-1]
+
+TASK [Set fact for Redis Stack availability] ***********************************
+ok: [redis-1]
+
+TASK [Use existing Redis installation for Redis Stack functionality] ***********
+ok: [redis-1] => {
+    "msg": "Using existing Redis installation and configuring for enhanced functionality"
+}
+
+TASK [Create Redis Stack configuration directories] ****************************
+changed: [redis-1] => (item=/etc/redis-stack)
+changed: [redis-1] => (item=/var/lib/redis-stack)
+changed: [redis-1] => (item=/var/log/redis-stack)
+changed: [redis-1] => (item=/run/redis-stack)
+
+TASK [Create symlinks for Redis Stack compatibility] ***************************
+changed: [redis-1] => (item={'src': '/var/lib/redis', 'dest': '/var/lib/redis-stack'})
+changed: [redis-1] => (item={'src': '/var/log/redis', 'dest': '/var/log/redis-stack'})
+changed: [redis-1] => (item={'src': '/etc/redis/redis.conf', 'dest': '/etc/redis-stack/redis-stack.conf'})
+
+TASK [Configure Redis Stack service alias] *************************************
+changed: [redis-1]
+
+TASK [Configure Redis Stack log rotation] **************************************
+changed: [redis-1]
+
+TASK [Set Redis Stack memory overcommit settings] ******************************
+ok: [redis-1] => (item={'name': 'vm.overcommit_memory', 'value': '1'})
+ok: [redis-1] => (item={'name': 'net.core.somaxconn', 'value': '65535'})
+
+TASK [Create Redis Stack authentication configuration] *************************
+fatal: [redis-1]: FAILED! => {"changed": false, "checksum": "8ff33d5452af1dd727bef27613332fc35b0d358e", "gid": 0, "group": "root", "mode": "0644", "msg": "chown failed: failed to look up user redis-stack", "owner": "root", "path": "/etc/redis-stack/users.acl", "size": 570, "state": "file", "uid": 0}
+
+PLAY RECAP *********************************************************************
+redis-1                    : ok=14   changed=4    unreachable=0    failed=1    skipped=0    rescued=0    ignored=1   
+
+[0;31m[ERROR][0m redis-stack deployment failed

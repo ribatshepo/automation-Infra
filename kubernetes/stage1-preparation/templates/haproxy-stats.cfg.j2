@@ -1,0 +1,20 @@
+# HAProxy Stats Configuration
+# This file provides additional stats configuration for the Kubernetes HAProxy setup
+
+# Stats socket configuration
+stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+stats timeout 30s
+
+# Runtime API configuration for dynamic updates
+program api
+    command dataplaneapi --host 0.0.0.0 --port 5555 --haproxy-bin /usr/sbin/haproxy --config-file /etc/haproxy/haproxy.cfg --reload-cmd "systemctl reload haproxy" --reload-delay 5 --userlist controller
+
+# User list for API access
+userlist controller
+    user admin password {{ haproxy_stats_password | password_hash('sha512') }}
+
+# Health check configuration
+backend health_check
+    mode http
+    option httpchk GET /health
+    http-check expect status 200

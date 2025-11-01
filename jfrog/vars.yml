@@ -1,0 +1,95 @@
+# JFrog Artifactory Configuration
+
+# Artifactory Version
+artifactory_version: "7.84.17"
+artifactory_download_url: "https://releases.jfrog.io/artifactory/bintray-artifactory/org/artifactory/oss/jfrog-artifactory-oss/{{ artifactory_version }}/jfrog-artifactory-oss-{{ artifactory_version }}-linux.tar.gz"
+
+# Installation directories
+artifactory_install_dir: "/opt/jfrog/artifactory"
+artifactory_data_dir: "/var/opt/jfrog/artifactory"
+artifactory_config_dir: "/etc/jfrog/artifactory"
+artifactory_backup_dir: "/backup/jfrog"
+artifactory_temp_dir: "/tmp/jfrog"
+artifactory_log_dir: "/var/log/jfrog"
+
+# Artifactory User Configuration
+artifactory_user: "artifactory"
+artifactory_group: "artifactory"
+artifactory_user_home: "/home/{{ artifactory_user }}"
+
+# Artifactory Network Configuration
+artifactory_hostname: "{{ ansible_default_ipv4.address }}"
+artifactory_port: 8081
+artifactory_context_path: ""
+
+# SSL Configuration
+artifactory_ssl_enabled: true
+artifactory_ssl_port: 8443
+artifactory_ssl_verify: false
+artifactory_ssl_cert_path: "{{ artifactory_config_dir }}/ssl/artifactory.crt"
+artifactory_ssl_key_path: "{{ artifactory_config_dir }}/ssl/artifactory.key"
+artifactory_keystore_password: "{{ vault_artifactory_keystore_password }}"
+
+# Java Configuration
+java_home: "/usr/lib/jvm/java-17-openjdk-amd64"
+artifactory_java_xms: "512M"
+artifactory_java_xmx: "2G"
+artifactory_java_additional_opts: "-server -Xss256k"
+
+# Database Configuration (using bundled PostgreSQL)
+artifactory_db_type: "postgresql"
+artifactory_db_host: "localhost"
+artifactory_db_port: 5432
+artifactory_db_name: "artifactory"
+artifactory_db_user: "{{ vault_artifactory_db_user | default('artifactory') }}"
+artifactory_db_password: "{{ vault_artifactory_db_password | default('password') }}"
+
+# Security Configuration
+artifactory_admin_username: "admin"
+artifactory_admin_password: "{{ vault_artifactory_admin_password }}"
+artifactory_access_token: "{{ vault_artifactory_access_token | default('') }}"
+
+# System Configuration
+artifactory_max_open_files: 32000
+artifactory_process_timeout: 300
+
+# Backup Configuration
+artifactory_backup_enabled: true
+artifactory_backup_schedule: "0 2 * * *"  # Daily at 2 AM
+artifactory_backup_retention_days: 7
+artifactory_backup_s3_enabled: false
+artifactory_backup_s3_bucket: ""
+artifactory_backup_s3_region: "us-east-1"
+
+# License Configuration (for Pro versions)
+artifactory_license_key: "{{ vault_artifactory_license_key | default('') }}"
+
+# Repository Configuration
+artifactory_repositories:
+  - name: "maven-central"
+    type: "remote"
+    package_type: "maven"
+    url: "https://repo1.maven.org/maven2/"
+  - name: "npm-registry"
+    type: "remote" 
+    package_type: "npm"
+    url: "https://registry.npmjs.org/"
+  - name: "docker-hub"
+    type: "remote"
+    package_type: "docker"
+    url: "https://registry-1.docker.io/"
+
+# Performance Tuning
+artifactory_pool_max_active: 100
+artifactory_pool_max_idle: 10
+artifactory_binary_provider_type: "filesystem"
+
+# Monitoring and Logging
+artifactory_log_level: "INFO"
+artifactory_log_max_file_size: "25MB"
+artifactory_log_max_backup_index: 10
+
+# Integration Configuration
+artifactory_xray_enabled: false
+artifactory_distribution_enabled: false
+artifactory_pipelines_enabled: false

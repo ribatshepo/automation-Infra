@@ -1,0 +1,48 @@
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: {{ ansible_host }}
+  bindPort: 6443
+nodeRegistration:
+  criSocket: unix:///var/run/containerd/containerd.sock
+  kubeletExtraArgs:
+    cgroup-driver: "systemd"
+    container-runtime-endpoint: "unix:///var/run/containerd/containerd.sock"
+    pod-infra-container-image: "registry.k8s.io/pause:3.9"
+---
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+kubernetesVersion: v{{ kubernetes_version }}
+controlPlaneEndpoint: "{{ kubernetes_api_endpoint }}:6443"
+apiServer:
+  certSANs:
+    - "{{ kubernetes_api_endpoint }}"
+    - "{{ hostvars['master-1']['ansible_host'] }}"
+    - "{{ hostvars['master-2']['ansible_host'] }}"
+    - "{{ hostvars['master-3']['ansible_host'] }}"
+    - "127.0.0.1"
+    - "localhost"
+etcd:
+  local:
+    dataDir: "/var/lib/etcd"
+networking:
+  serviceSubnet: "{{ kubernetes_service_cidr }}"
+  podSubnet: "{{ kubernetes_pod_cidr }}"
+  dnsDomain: "cluster.local"
+controllerManager:
+  extraArgs:
+    bind-address: "0.0.0.0"
+scheduler:
+  extraArgs:
+    bind-address: "0.0.0.0"
+---
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: KubeletConfiguration
+serverTLSBootstrap: true
+cgroupDriver: systemd
+containerRuntimeEndpoint: unix:///var/run/containerd/containerd.sock
+---
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+kind: KubeProxyConfiguration
+bindAddress: 0.0.0.0
+metricsBindAddress: 0.0.0.0:10249

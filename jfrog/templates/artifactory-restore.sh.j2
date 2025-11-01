@@ -1,0 +1,100 @@
+#!/bin/bash
+# JFrog Artifactory Restore Script
+
+set -e
+
+# Configuration
+ARTIFACTORY_HOME="{{ artifactory_install_dir }}"
+ARTIFACTORY_DATA="{{ artifactory_data_dir }}"
+BACKUP_DIR="{{ artifactory_backup_dir }}"
+ARTIFACTORY_USER="{{ artifactory_user }}"
+ARTIFACTORY_GROUP="{{ artifactory_group }}"
+
+# Usage
+usage() {
+    echo "Usage: $0 <backup_file>"
+    echo "Example: $0 artifactory_backup_20231101_120000.tar.gz"
+    exit 1
+}
+
+# Check arguments
+if [ $# -ne 1 ]; then
+    usage
+fi
+
+BACKUP_FILE="$1"
+BACKUP_PATH="${BACKUP_DIR}/${BACKUP_FILE}"
+
+# Verify backup file exists
+if [ ! -f "$BACKUP_PATH" ]; then
+    echo "ERROR: Backup file not found: $BACKUP_PATH"
+    exit 1
+fi
+
+echo "=== JFrog Artifactory Restore Started at $(date) ==="
+echo "Restoring from: $BACKUP_FILE"
+
+# Stop Artifactory service
+echo "Stopping Artifactory service..."
+systemctl stop artifactory || true
+
+# Backup current data
+echo "Backing up current data..."
+CURRENT_BACKUP="current_backup_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "${BACKUP_DIR}/${CURRENT_BACKUP}"
+cp -r "${ARTIFACTORY_DATA}" "${BACKUP_DIR}/${CURRENT_BACKUP}/" 2>/dev/null || true
+
+# Extract backup
+echo "Extracting backup archive..."
+cd "$BACKUP_DIR"
+tar -xzf "$BACKUP_FILE"
+EXTRACT_DIR=$(basename "$BACKUP_FILE" .tar.gz)
+
+# Restore configuration
+echo "Restoring configuration..."
+rm -rf "${ARTIFACTORY_DATA}/etc"
+cp -r "${BACKUP_DIR}/${EXTRACT_DIR}/etc" "${ARTIFACTORY_DATA}/"
+
+# Restore data
+echo "Restoring data..."
+rm -rf "${ARTIFACTORY_DATA}/data"
+cp -r "${BACKUP_DIR}/${EXTRACT_DIR}/data" "${ARTIFACTORY_DATA}/"
+
+# Restore database (if backup exists)
+if [ -f "${BACKUP_DIR}/${EXTRACT_DIR}/database.sql" ]; then
+    echo "Restoring database..."
+{% if artifactory_db_type == 'postgresql' %}
+    psql -h {{ artifactory_db_host }} -p {{ artifactory_db_port }} \
+        -U {{ artifactory_db_user }} -d {{ artifactory_db_name }} \
+        < "${BACKUP_DIR}/${EXTRACT_DIR}/database.sql"
+{% elif artifactory_db_type == 'mysql' %}
+    mysql -h {{ artifactory_db_host }} -P {{ artifactory_db_port }} \
+        -u {{ artifactory_db_user }} -p{{ artifactory_db_password }} \
+        {{ artifactory_db_name }} < "${BACKUP_DIR}/${EXTRACT_DIR}/database.sql"
+{% endif %}
+fi
+
+# Set proper ownership
+echo "Setting ownership..."
+chown -R ${ARTIFACTORY_USER}:${ARTIFACTORY_GROUP} "$ARTIFACTORY_DATA"
+
+# Clean up extracted files
+rm -rf "${BACKUP_DIR}/${EXTRACT_DIR}"
+
+# Start Artifactory service
+echo "Starting Artifactory service..."
+systemctl start artifactory
+
+# Wait for service to be ready
+echo "Waiting for Artifactory to start..."
+sleep 30
+
+# Verify service is running
+if systemctl is-active --quiet artifactory; then
+    echo "Artifactory restore completed successfully!"
+else
+    echo "WARNING: Artifactory service is not running. Check logs for issues."
+    exit 1
+fi
+
+echo "=== JFrog Artifactory Restore Completed at $(date) ==="

@@ -1,0 +1,75 @@
+#!/bin/bash
+# JFrog Artifactory Backup Script
+
+set -e
+
+# Configuration
+ARTIFACTORY_HOME="{{ artifactory_install_dir }}"
+ARTIFACTORY_DATA="{{ artifactory_data_dir }}"
+BACKUP_DIR="{{ artifactory_backup_dir }}"
+RETENTION_DAYS={{ artifactory_backup_retention_days }}
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+BACKUP_NAME="artifactory_backup_${TIMESTAMP}"
+BACKUP_PATH="${BACKUP_DIR}/${BACKUP_NAME}"
+
+# Logging
+LOG_FILE="${BACKUP_DIR}/backup.log"
+exec 1> >(tee -a "$LOG_FILE")
+exec 2> >(tee -a "$LOG_FILE" >&2)
+
+echo "=== JFrog Artifactory Backup Started at $(date) ==="
+
+# Create backup directory
+mkdir -p "$BACKUP_PATH"
+
+# Backup configuration
+echo "Backing up configuration..."
+cp -r "${ARTIFACTORY_DATA}/etc" "${BACKUP_PATH}/"
+
+# Backup data (exclude logs and temp files)
+echo "Backing up data..."
+rsync -av --exclude='logs/*' --exclude='tmp/*' --exclude='work/*' \
+    "${ARTIFACTORY_DATA}/data" "${BACKUP_PATH}/"
+
+# Backup database (if not using embedded)
+{% if artifactory_db_type != 'derby' %}
+echo "Backing up database..."
+{% if artifactory_db_type == 'postgresql' %}
+pg_dump -h {{ artifactory_db_host }} -p {{ artifactory_db_port }} \
+    -U {{ artifactory_db_user }} -d {{ artifactory_db_name }} \
+    > "${BACKUP_PATH}/database.sql"
+{% elif artifactory_db_type == 'mysql' %}
+mysqldump -h {{ artifactory_db_host }} -P {{ artifactory_db_port }} \
+    -u {{ artifactory_db_user }} -p{{ artifactory_db_password }} \
+    {{ artifactory_db_name }} > "${BACKUP_PATH}/database.sql"
+{% endif %}
+{% endif %}
+
+# Create archive
+echo "Creating backup archive..."
+cd "$BACKUP_DIR"
+tar -czf "${BACKUP_NAME}.tar.gz" "$BACKUP_NAME"
+rm -rf "$BACKUP_NAME"
+
+# Cleanup old backups
+echo "Cleaning up old backups..."
+find "$BACKUP_DIR" -name "artifactory_backup_*.tar.gz" -type f -mtime +$RETENTION_DAYS -delete
+
+{% if artifactory_backup_s3_enabled %}
+# Upload to S3 (if configured)
+echo "Uploading to S3..."
+aws s3 cp "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz" \
+    "s3://{{ artifactory_backup_s3_bucket }}/artifactory-backups/" \
+    --region {{ artifactory_backup_s3_region }}
+{% endif %}
+
+# Verify backup
+if [ -f "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz" ]; then
+    BACKUP_SIZE=$(du -h "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz" | cut -f1)
+    echo "Backup completed successfully: ${BACKUP_NAME}.tar.gz (${BACKUP_SIZE})"
+else
+    echo "ERROR: Backup failed!"
+    exit 1
+fi
+
+echo "=== JFrog Artifactory Backup Completed at $(date) ==="

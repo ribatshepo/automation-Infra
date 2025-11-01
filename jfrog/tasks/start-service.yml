@@ -1,0 +1,59 @@
+---
+# Improved service management with proper dependencies and timeouts
+- name: Stop Artifactory if running (for clean restart)
+  systemd:
+    name: artifactory
+    state: stopped
+  ignore_errors: yes
+
+- name: Ensure PostgreSQL is running first
+  systemd:
+    name: postgresql
+    state: started
+    enabled: yes
+
+- name: Wait for PostgreSQL readiness
+  wait_for:
+    port: 5432
+    timeout: 60
+
+- name: Generate or verify master key exists
+  include_tasks: generate-master-key.yml
+
+- name: Start Artifactory with extended timeout
+  systemd:
+    name: artifactory
+    state: started
+    enabled: yes
+  register: service_start
+
+- name: Wait for service to fully activate
+  systemd:
+    name: artifactory
+    state: started
+  register: service_status
+  until: service_status.status.ActiveState == "active"
+  retries: 20
+  delay: 15
+  ignore_errors: yes
+
+- name: Check if service failed to start
+  systemd:
+    name: artifactory
+    state: started
+  register: final_service_check
+
+- name: Display service logs if failed
+  command: journalctl -u artifactory.service --no-pager -l -n 20
+  register: service_logs
+  when: final_service_check.status.ActiveState != "active"
+
+- name: Show service logs
+  debug:
+    var: service_logs.stdout_lines
+  when: service_logs is defined
+
+- name: Fail if service didn't start properly
+  fail:
+    msg: "Artifactory service failed to start properly. Check logs above."
+  when: final_service_check.status.ActiveState != "active"

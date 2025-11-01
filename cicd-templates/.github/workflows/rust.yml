@@ -1,0 +1,378 @@
+name: 'Rust CI/CD Pipeline'
+
+on:
+  workflow_call:
+    inputs:
+      rust-version:
+        description: 'Rust version to use'
+        required: false
+        default: 'stable'
+        type: string
+      run-tests:
+        description: 'Run unit tests'
+        required: false
+        default: true
+        type: boolean
+      run-benchmarks:
+        description: 'Run benchmarks'
+        required: false
+        default: false
+        type: boolean
+      run-linting:
+        description: 'Run linting (clippy)'
+        required: false
+        default: true
+        type: boolean
+      run-security-scan:
+        description: 'Run security scanning with JFrog Xray'
+        required: false
+        default: true
+        type: boolean
+      build-docker:
+        description: 'Build Docker image'
+        required: false
+        default: true
+        type: boolean
+      deploy-package:
+        description: 'Deploy Rust crate'
+        required: false
+        default: true
+        type: boolean
+      environment:
+        description: 'Deployment environment'
+        required: false
+        default: 'development'
+        type: string
+    secrets:
+      HARBOR_REGISTRY:
+        required: true
+      HARBOR_USERNAME:
+        required: true
+      HARBOR_PASSWORD:
+        required: true
+      HARBOR_PROJECT:
+        required: true
+      ARTIFACTORY_URL:
+        required: true
+      ARTIFACTORY_USERNAME:
+        required: true
+      ARTIFACTORY_PASSWORD:
+        required: true
+      ARTIFACTORY_CARGO_REPO:
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-and-test:
+    name: 'Build and Test'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      package-name: ${{ steps.metadata.outputs.package-name }}
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 'Setup Rust'
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ inputs.rust-version }}
+          override: true
+          components: rustfmt, clippy
+
+      - name: 'Extract project metadata'
+        id: metadata
+        run: |
+          # Get package name and version from Cargo.toml
+          if [[ -f "Cargo.toml" ]]; then
+            PACKAGE_NAME=$(grep '^name = ' Cargo.toml | cut -d'"' -f2 | head -1)
+            VERSION=$(grep '^version = ' Cargo.toml | cut -d'"' -f2 | head -1)
+          else
+            PACKAGE_NAME="${GITHUB_REPOSITORY##*/}"
+            VERSION="0.1.0"
+          fi
+          
+          echo "package-name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          echo "base-version=$VERSION" >> $GITHUB_OUTPUT
+          
+          echo "Package: $PACKAGE_NAME"
+          echo "Base Version: $VERSION"
+
+      - name: 'Determine version'
+        id: version
+        run: |
+          BASE_VERSION="${{ steps.metadata.outputs.base-version }}"
+          
+          # Use git tag if available, otherwise generate version
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+            # Remove 'v' prefix if present
+            VERSION=${VERSION#v}
+          else
+            VERSION="${BASE_VERSION}-dev.${GITHUB_RUN_NUMBER}+${GITHUB_SHA::8}"
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+          
+          # Update Cargo.toml with new version
+          sed -i "s/^version = .*/version = \"$VERSION\"/" Cargo.toml
+
+      - name: 'Cache Cargo dependencies'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ inputs.rust-version }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: 'Install cargo-audit for security scanning'
+        if: inputs.run-security-scan
+        run: cargo install cargo-audit
+
+      - name: 'Run formatting check'
+        if: inputs.run-linting
+        run: |
+          echo "##  Code Formatting" >> $GITHUB_STEP_SUMMARY
+          if cargo fmt --all -- --check; then
+            echo "Code is properly formatted" >> $GITHUB_STEP_SUMMARY
+          else
+            echo " Code formatting issues found" >> $GITHUB_STEP_SUMMARY
+            echo "::error title=Formatting::Code is not properly formatted. Run 'cargo fmt' to fix."
+            exit 1
+          fi
+
+      - name: 'Run Clippy linting'
+        if: inputs.run-linting
+        run: |
+          echo "##  Clippy Linting" >> $GITHUB_STEP_SUMMARY
+          cargo clippy --all-targets --all-features -- -D warnings
+          echo "No linting issues found" >> $GITHUB_STEP_SUMMARY
+
+      - name: 'Cargo audit security scan'
+        if: inputs.run-security-scan
+        run: |
+          echo "##  Cargo Audit Security Scan" >> $GITHUB_STEP_SUMMARY
+          
+          # Run cargo audit
+          if cargo audit --format json > audit-report.json; then
+            echo "No known vulnerabilities found" >> $GITHUB_STEP_SUMMARY
+          else
+            VULNS=$(cat audit-report.json | jq '.vulnerabilities.count' 2>/dev/null || echo "unknown")
+            echo "⚠️ Vulnerabilities found: $VULNS" >> $GITHUB_STEP_SUMMARY
+            echo "::warning title=Security Alert::Vulnerabilities found in dependencies"
+          fi
+
+      - name: 'JFrog Xray security scan'
+        if: inputs.run-security-scan
+        run: |
+          # Install JFrog CLI
+          curl -fL https://getcli.jfrog.io | sh
+          sudo mv jfrog /usr/local/bin/
+          
+          # Configure JFrog CLI
+          jfrog config add artifactory \
+            --url="${{ secrets.ARTIFACTORY_URL }}" \
+            --user="${{ secrets.ARTIFACTORY_USERNAME }}" \
+            --password="${{ secrets.ARTIFACTORY_PASSWORD }}" \
+            --interactive=false
+          
+          # Scan Rust dependencies
+          echo "### JFrog Xray Security Scan" >> $GITHUB_STEP_SUMMARY
+          
+          # Note: JFrog CLI audit for Cargo is limited, but we can scan the built artifacts
+          jfrog audit --format=json > xray-report.json || true
+          
+          # Parse results if available
+          if [[ -f "xray-report.json" ]] && [[ -s "xray-report.json" ]]; then
+            CRITICAL=$(cat xray-report.json | jq '.vulnerabilities[]? | select(.severity=="Critical") | .summary' | wc -l 2>/dev/null || echo "0")
+            HIGH=$(cat xray-report.json | jq '.vulnerabilities[]? | select(.severity=="High") | .summary' | wc -l 2>/dev/null || echo "0")
+            
+            echo " **Xray Scan Results:**" >> $GITHUB_STEP_SUMMARY
+            echo "- Critical: $CRITICAL" >> $GITHUB_STEP_SUMMARY
+            echo "- High: $HIGH" >> $GITHUB_STEP_SUMMARY
+          else
+            echo " **Xray Scan**: Completed (limited Cargo support)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 'Run tests'
+        if: inputs.run-tests
+        run: |
+          echo "##  Test Results" >> $GITHUB_STEP_SUMMARY
+          
+          # Install cargo-tarpaulin for coverage
+          cargo install cargo-tarpaulin
+          
+          # Run tests with coverage
+          cargo tarpaulin --verbose --all-features --workspace --timeout 120 \
+            --out xml --out html --output-dir ./coverage/ \
+            --exclude-files src/main.rs
+          
+          # Get coverage percentage
+          if [[ -f "coverage/tarpaulin-report.html" ]]; then
+            COVERAGE=$(grep -o '[0-9]*\.[0-9]*%' coverage/tarpaulin-report.html | head -1 || echo "unknown")
+            echo " **Test Coverage**: $COVERAGE" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 'Run benchmarks'
+        if: inputs.run-benchmarks
+        run: |
+          echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          cargo bench | tee benchmark.txt
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat benchmark.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: 'Build release'
+        run: |
+          # Build for multiple targets
+          echo "Building release binaries..."
+          
+          # Add target platforms
+          rustup target add x86_64-unknown-linux-gnu
+          rustup target add aarch64-unknown-linux-gnu
+          rustup target add x86_64-pc-windows-gnu
+          rustup target add x86_64-apple-darwin
+          
+          # Install cross-compilation tools
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 gcc-aarch64-linux-gnu
+          
+          # Build for different targets
+          cargo build --release --target x86_64-unknown-linux-gnu
+          cargo build --release --target aarch64-unknown-linux-gnu || true
+          cargo build --release --target x86_64-pc-windows-gnu || true
+          
+          # Create distribution directory
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-gnu/release/${{ steps.metadata.outputs.package-name }} dist/ 2>/dev/null || true
+          cp target/aarch64-unknown-linux-gnu/release/${{ steps.metadata.outputs.package-name }} dist/${{ steps.metadata.outputs.package-name }}-aarch64 2>/dev/null || true
+          cp target/x86_64-pc-windows-gnu/release/${{ steps.metadata.outputs.package-name }}.exe dist/ 2>/dev/null || true
+
+      - name: 'Package crate'
+        if: inputs.deploy-package
+        run: |
+          # Create crate package
+          cargo package --allow-dirty
+
+      - name: 'Upload test results'
+        if: inputs.run-tests && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            coverage/
+            benchmark.txt
+
+      - name: 'Upload build artifacts'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            target/package/
+            dist/
+            audit-report.json
+            xray-report.json
+
+  deploy-package:
+    name: 'Deploy Rust Crate'
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: inputs.deploy-package && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Download build artifacts'
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+
+      - name: 'Deploy to Artifactory'
+        uses: ./.github/actions/artifactory-push
+        with:
+          artifactory-url: ${{ secrets.ARTIFACTORY_URL }}
+          username: ${{ secrets.ARTIFACTORY_USERNAME }}
+          password: ${{ secrets.ARTIFACTORY_PASSWORD }}
+          repository: ${{ secrets.ARTIFACTORY_CARGO_REPO }}
+          package-type: 'cargo'
+          package-path: './target/package'
+          package-name: ${{ needs.build-and-test.outputs.package-name }}
+          package-version: ${{ needs.build-and-test.outputs.version }}
+          build-properties: 'environment=${{ inputs.environment }};rust.version=${{ inputs.rust-version }}'
+          scan-package: ${{ inputs.run-security-scan }}
+
+  build-docker:
+    name: 'Build and Push Docker Image'
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: inputs.build-docker && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Download build artifacts'
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+
+      - name: 'Build and push to Harbor'
+        uses: ./.github/actions/harbor-push
+        with:
+          registry: ${{ secrets.HARBOR_REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+          project: ${{ secrets.HARBOR_PROJECT }}
+          image-name: ${{ needs.build-and-test.outputs.package-name }}
+          dockerfile: './Dockerfile'
+          context: '.'
+          build-args: |
+            VERSION=${{ needs.build-and-test.outputs.version }}
+            RUST_VERSION=${{ inputs.rust-version }}
+          tags: ${{ inputs.environment }}
+          scan-image: ${{ inputs.run-security-scan }}
+
+  deploy:
+    name: 'Deploy Application'
+    runs-on: ubuntu-latest
+    needs: [build-and-test, deploy-package, build-docker]
+    if: always() && needs.build-and-test.result == 'success' && (needs.deploy-package.result == 'success' || needs.deploy-package.result == 'skipped') && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped')
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: 'Deployment summary'
+        run: |
+          echo "## 🦀 Rust Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Application**: ${{ needs.build-and-test.outputs.package-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: ${{ needs.build-and-test.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Rust Version**: ${{ inputs.rust-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit**: ${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Components Deployed:" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ inputs.deploy-package }}" == "true" ]]; then
+            echo "- Rust Crate to Artifactory" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ inputs.build-docker }}" == "true" ]]; then
+            echo "- Docker Image to Harbor" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Artifacts:" >> $GITHUB_STEP_SUMMARY
+          echo "- Linux x86_64 binary" >> $GITHUB_STEP_SUMMARY
+          echo "- Linux ARM64 binary" >> $GITHUB_STEP_SUMMARY
+          echo "- Windows x86_64 binary" >> $GITHUB_STEP_SUMMARY

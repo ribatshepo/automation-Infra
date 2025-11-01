@@ -1,0 +1,21 @@
+# Sample Ansible Vault file for PostgreSQL passwords
+# Create this file using: ansible-vault create group_vars/databases/vault.yml
+# Edit with: ansible-vault edit group_vars/databases/vault.yml
+
+---
+# Secure passwords for PostgreSQL users
+# Replace these with strong, unique passwords
+
+postgresql_app_password: "SuperSecureAppPassword123!"
+postgresql_readonly_password: "SecureReadOnlyPass456!"
+postgresql_monitoring_password: "MonitoringPassword789!"
+
+# Optional: PostgreSQL superuser password change
+# postgresql_postgres_password: "NewPostgresPassword000!"
+
+# Database-specific passwords (if needed)
+app_production_password: "ProdDBPassword111!"
+app_staging_password: "StagingDBPassword222!"
+
+# Backup encryption key (for future use)
+postgresql_backup_encryption_key: "BackupEncryptionKey333!"

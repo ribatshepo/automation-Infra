@@ -1,0 +1,66 @@
+# JFrog Artifactory System Configuration
+configVersion: 1
+
+shared:
+  # Security configuration
+  security:
+{% if master_key is defined %}
+    masterKey: "{{ master_key }}"
+{% endif %}
+{% if join_key is defined %}
+    joinKey: "{{ join_key }}"
+{% else %}
+    joinKey: "{{ artifactory_access_token | default('default-key') }}"
+{% endif %}
+
+  # Node configuration
+  node:
+    id: "{{ ansible_hostname }}"
+    ip: "{{ ansible_default_ipv4.address }}"
+
+# Artifactory specific configuration
+artifactory:
+  # Service configuration
+  service:
+    type: artifactory
+
+  # Tomcat configuration
+  tomcat:
+    connector:
+      maxThreads: 200
+      sendReasonPhrase: false
+
+  # Database configuration
+  database:
+    maxOpenConnections: {{ artifactory_pool_max_active }}
+    maxIdleConnections: {{ artifactory_pool_max_idle }}
+
+{% if artifactory_ssl_enabled %}
+  # SSL configuration
+  ssl:
+    enabled: true
+    port: {{ artifactory_ssl_port }}
+    keyStore: {{ artifactory_config_dir }}/ssl/keystore/artifactory.jks
+    keyStorePassword: {{ artifactory_keystore_password }}
+    trustStore: {{ artifactory_config_dir }}/ssl/keystore/artifactory.jks
+    trustStorePassword: {{ artifactory_keystore_password }}
+{% endif %}
+
+  # Binary storage configuration
+  binarystore:
+    type: {{ artifactory_binary_provider_type }}
+    maxCacheSize: 5000000000
+    cacheProviderDir: {{ artifactory_data_dir }}/data/filestore
+
+  # Security settings
+  security:
+    anonymousAccess: false
+    anonAccessToBuildInfosDisabled: true
+
+  # Repository settings
+  cleanup:
+    skipTrashcan: false
+
+  # System settings
+  system:
+    flushDBOnBootstrap: false

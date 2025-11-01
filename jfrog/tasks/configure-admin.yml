@@ -1,0 +1,67 @@
+---
+# Automated admin password configuration for JFrog Artifactory
+- name: Check current admin password status
+  uri:
+    url: "http://localhost:8081/artifactory/api/security/users/admin"
+    method: GET
+    user: admin
+    password: password
+    force_basic_auth: yes
+    status_code: [200, 401, 403]
+  register: admin_status_default
+  ignore_errors: yes
+
+- name: Check if custom password already works
+  uri:
+    url: "http://localhost:8081/artifactory/api/security/users/admin"
+    method: GET
+    user: admin
+    password: "{{ vault_artifactory_admin_password }}"
+    force_basic_auth: yes
+    status_code: [200, 401, 403]
+  register: admin_status_custom
+  ignore_errors: yes
+
+- name: Update admin password if default credentials work
+  uri:
+    url: "http://localhost:8081/artifactory/api/security/users/admin"
+    method: PUT
+    user: admin
+    password: password
+    force_basic_auth: yes
+    body_format: json
+    body:
+      name: admin
+      email: "admin@{{ ansible_fqdn | default('localhost') }}"
+      password: "{{ vault_artifactory_admin_password }}"
+      admin: true
+      profileUpdatable: true
+      disableUIAccess: false
+      internalPasswordDisabled: false
+    status_code: [200, 201]
+  register: password_update
+  when: 
+    - admin_status_default.status == 200
+    - admin_status_custom.status != 200
+  ignore_errors: yes
+
+- name: Verify new password works
+  uri:
+    url: "http://localhost:8081/artifactory/api/system/ping"
+    method: GET
+    user: admin
+    password: "{{ vault_artifactory_admin_password }}"
+    force_basic_auth: yes
+    status_code: 200
+  register: new_password_check
+  when: password_update is succeeded
+  retries: 5
+  delay: 3
+
+- name: Display admin credentials status
+  debug:
+    msg: |
+      Admin Credentials Status:
+      - Default password (admin:password): {{ 'Working' if admin_status_default.status == 200 else 'Not Working' }}
+      - Custom password (admin:{{ vault_artifactory_admin_password }}): {{ 'Working' if admin_status_custom.status == 200 or new_password_check is succeeded else 'Not Working' }}
+      - Password updated: {{ 'Yes' if password_update is succeeded else 'No' if password_update is defined else 'Not needed' }}

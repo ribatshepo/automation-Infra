@@ -1,0 +1,425 @@
+---
+- name: Install and Configure PostgreSQL Database Server
+  hosts: databases
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    postgresql_version: "15"
+    postgresql_port: 5432
+    postgresql_max_connections: 200
+    postgresql_shared_buffers: "256MB"
+    postgresql_effective_cache_size: "1GB"
+    postgresql_maintenance_work_mem: "64MB"
+    postgresql_checkpoint_completion_target: 0.9
+    postgresql_wal_buffers: "16MB"
+    postgresql_default_statistics_target: 100
+    postgresql_random_page_cost: 4.0
+    postgresql_effective_io_concurrency: 2
+    
+    # Database and user configuration
+    postgresql_databases:
+      - name: "app_production"
+        encoding: "UTF-8"
+        collate: "en_US.UTF-8"
+        ctype: "en_US.UTF-8"
+      - name: "app_staging"
+        encoding: "UTF-8"
+        collate: "en_US.UTF-8"
+        ctype: "en_US.UTF-8"
+    
+    postgresql_users:
+      - name: "app_user"
+        password: "{{ postgresql_app_password | default('changeme123') }}"
+        databases: ["app_production", "app_staging"]
+        privileges: "ALL"
+      - name: "readonly_user"
+        password: "{{ postgresql_readonly_password | default('readonly123') }}"
+        databases: ["app_production", "app_staging"]
+        privileges: "SELECT"
+    
+    # Network configuration
+    postgresql_listen_addresses: "*"
+    postgresql_allowed_hosts:
+      - "10.100.10.0/24"  # Infrastructure network
+      - "127.0.0.1/32"    # Localhost
+    
+  tasks:
+    - name: Update apt package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 300
+      tags: 
+        - packages
+        - update
+
+    - name: Install required packages for PostgreSQL
+      apt:
+        name:
+          - wget
+          - ca-certificates
+          - gnupg
+          - lsb-release
+          - python3-psycopg2
+          - python3-pip
+        state: present
+      tags:
+        - packages
+        - prerequisites
+
+    - name: Add PostgreSQL official GPG key
+      apt_key:
+        url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        state: present
+      tags:
+        - packages
+        - repository
+
+    - name: Add PostgreSQL official repository
+      apt_repository:
+        repo: "deb http://apt.postgresql.org/pub/repos/apt/ {{ ansible_distribution_release }}-pgdg main"
+        state: present
+        update_cache: yes
+      tags:
+        - packages
+        - repository
+
+    - name: Install PostgreSQL server and client
+      apt:
+        name:
+          - "postgresql-{{ postgresql_version }}"
+          - "postgresql-client-{{ postgresql_version }}"
+          - "postgresql-contrib-{{ postgresql_version }}"
+          - postgresql-server-dev-all
+        state: present
+      notify:
+        - restart postgresql
+      tags:
+        - packages
+        - postgresql
+
+    - name: Install additional PostgreSQL extensions
+      apt:
+        name:
+          - "postgresql-{{ postgresql_version }}-postgis-3"
+          - "postgresql-{{ postgresql_version }}-postgis-3-scripts"
+        state: present
+      notify:
+        - restart postgresql
+      tags:
+        - packages
+        - extensions
+
+    - name: Configure PostgreSQL main settings
+      template:
+        src: postgresql.conf.j2
+        dest: "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
+        owner: postgres
+        group: postgres
+        mode: '0644'
+        backup: yes
+      notify:
+        - restart postgresql
+      tags:
+        - config
+
+    - name: Configure PostgreSQL host-based authentication
+      template:
+        src: pg_hba.conf.j2
+        dest: "/etc/postgresql/{{ postgresql_version }}/main/pg_hba.conf"
+        owner: postgres
+        group: postgres
+        mode: '0640'
+        backup: yes
+      notify:
+        - restart postgresql
+      tags:
+        - config
+        - security
+
+    - name: Check PostgreSQL service status before starting
+      systemd:
+        name: "postgresql@{{ postgresql_version }}-main"
+      register: postgres_status_check
+      failed_when: false
+      tags:
+        - service
+
+    - name: Stop PostgreSQL service if it's in failed state
+      systemd:
+        name: "postgresql@{{ postgresql_version }}-main"
+        state: stopped
+      when: postgres_status_check.status.ActiveState == "failed"
+      tags:
+        - service
+
+    - name: Ensure PostgreSQL service is started and enabled
+      systemd:
+        name: "postgresql@{{ postgresql_version }}-main"
+        state: started
+        enabled: yes
+      tags:
+        - service
+
+    - name: Create custom PostgreSQL configuration directory
+      file:
+        path: "/etc/postgresql/{{ postgresql_version }}/main/conf.d"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: '0755'
+      tags:
+        - config
+
+    - name: Create performance tuning configuration
+      copy:
+        content: |
+          # Performance Tuning Configuration
+          # This file is managed by Ansible
+          
+          # Memory settings
+          shared_buffers = {{ postgresql_shared_buffers }}
+          effective_cache_size = {{ postgresql_effective_cache_size }}
+          maintenance_work_mem = {{ postgresql_maintenance_work_mem }}
+          
+          # Checkpoint settings
+          checkpoint_completion_target = {{ postgresql_checkpoint_completion_target }}
+          wal_buffers = {{ postgresql_wal_buffers }}
+          
+          # Query planner settings
+          default_statistics_target = {{ postgresql_default_statistics_target }}
+          random_page_cost = {{ postgresql_random_page_cost }}
+          effective_io_concurrency = {{ postgresql_effective_io_concurrency }}
+          
+          # Logging settings
+          log_destination = 'stderr'
+          logging_collector = on
+          log_directory = 'log'
+          log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+          log_rotation_age = 1d
+          log_rotation_size = 100MB
+          log_min_duration_statement = 1000
+          log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+          log_checkpoints = on
+          log_connections = on
+          log_disconnections = on
+          log_lock_waits = on
+          
+          # Connection settings
+          max_connections = {{ postgresql_max_connections }}
+          
+        dest: "/etc/postgresql/{{ postgresql_version }}/main/conf.d/99-performance.conf"
+        owner: postgres
+        group: postgres
+        mode: '0644'
+      notify:
+        - restart postgresql
+      tags:
+        - config
+        - performance
+
+    # Ensure handlers are run before database operations
+    - name: Flush handlers to ensure PostgreSQL is running
+      meta: flush_handlers
+
+    - name: Wait for PostgreSQL to be ready
+      wait_for:
+        port: "{{ postgresql_port }}"
+        host: "127.0.0.1"
+        delay: 5
+        timeout: 30
+      tags:
+        - database
+        - setup
+
+    - name: Create PostgreSQL databases
+      shell: |
+        sudo -u postgres createdb -E "{{ item.encoding }}" -l "{{ item.collate }}" -T template0 "{{ item.name }}"
+      loop: "{{ postgresql_databases }}"
+      register: createdb_result
+      failed_when: createdb_result.rc != 0 and 'already exists' not in createdb_result.stderr
+      changed_when: createdb_result.rc == 0
+      tags:
+        - database
+        - setup
+
+    - name: Create PostgreSQL users
+      shell: |
+        sudo -u postgres psql -c "CREATE USER {{ item.name }} WITH PASSWORD '{{ item.password }}';"
+      loop: "{{ postgresql_users }}"
+      register: createuser_result
+      failed_when: createuser_result.rc != 0 and 'already exists' not in createuser_result.stderr
+      changed_when: createuser_result.rc == 0
+      no_log: true
+      tags:
+        - database
+        - users
+        - security
+
+    - name: Grant database privileges to users
+      block:
+        - name: Grant database connection privileges
+          shell: |
+            sudo -u postgres psql -d "{{ item.0.name }}" -c "GRANT ALL PRIVILEGES ON DATABASE {{ item.0.name }} TO {{ item.1.name }};"
+          loop: "{{ postgresql_databases | product(postgresql_users) | list }}"
+          when: item.0.name in item.1.databases and item.1.privileges == 'ALL'
+          register: grant_result
+          failed_when: grant_result.rc != 0 and 'already exists' not in grant_result.stderr
+          changed_when: grant_result.rc == 0
+          
+        - name: Grant schema privileges for readonly users
+          shell: |
+            sudo -u postgres psql -d "{{ item.0.name }}" -c "GRANT CONNECT ON DATABASE {{ item.0.name }} TO {{ item.1.name }}; GRANT USAGE ON SCHEMA public TO {{ item.1.name }}; GRANT SELECT ON ALL TABLES IN SCHEMA public TO {{ item.1.name }}; ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO {{ item.1.name }};"
+          loop: "{{ postgresql_databases | product(postgresql_users) | list }}"
+          when: item.0.name in item.1.databases and item.1.privileges == 'SELECT'
+          register: readonly_grant_result
+          failed_when: readonly_grant_result.rc != 0 and 'already exists' not in readonly_grant_result.stderr
+          changed_when: readonly_grant_result.rc == 0
+      tags:
+        - database
+        - users
+        - security
+
+    - name: Create schema for application databases
+      shell: |
+        sudo -u postgres psql -d "{{ item.name }}" -c "CREATE SCHEMA IF NOT EXISTS app_schema AUTHORIZATION app_user;"
+      loop: "{{ postgresql_databases }}"
+      register: schema_result
+      failed_when: schema_result.rc != 0 and 'already exists' not in schema_result.stderr
+      changed_when: schema_result.rc == 0
+      tags:
+        - database
+        - schema
+
+    - name: Install commonly used PostgreSQL extensions
+      shell: |
+        sudo -u postgres psql -d "{{ item.1.name }}" -c "CREATE EXTENSION IF NOT EXISTS \"{{ item.0 }}\";"
+      loop: "{{ ['uuid-ossp', 'pgcrypto', 'unaccent'] | product(postgresql_databases) | list }}"
+      register: extension_result
+      failed_when: extension_result.rc != 0 and 'already exists' not in extension_result.stderr
+      changed_when: extension_result.rc == 0
+      tags:
+        - database
+        - extensions
+
+    - name: Create database backup directory
+      file:
+        path: /var/backups/postgresql
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: '0755'
+      tags:
+        - backup
+        - setup
+
+    - name: Create backup script
+      copy:
+        content: |
+          #!/bin/bash
+          # PostgreSQL Backup Script
+          # This script is managed by Ansible
+          
+          BACKUP_DIR="/var/backups/postgresql"
+          DATE=$(date +%Y%m%d_%H%M%S)
+          RETENTION_DAYS=7
+          
+          # Create timestamped backup directory
+          mkdir -p "$BACKUP_DIR/$DATE"
+          
+          # Backup all databases
+          {% for db in postgresql_databases %}
+          echo "Backing up database: {{ db.name }}"
+          pg_dump -U postgres -d {{ db.name }} | gzip > "$BACKUP_DIR/$DATE/{{ db.name }}_$DATE.sql.gz"
+          {% endfor %}
+          
+          # Backup global objects (users, roles, etc.)
+          pg_dumpall -U postgres --globals-only | gzip > "$BACKUP_DIR/$DATE/globals_$DATE.sql.gz"
+          
+          # Remove old backups
+          find "$BACKUP_DIR" -type d -mtime +$RETENTION_DAYS -exec rm -rf {} \; 2>/dev/null
+          
+          echo "Backup completed: $BACKUP_DIR/$DATE"
+        dest: /usr/local/bin/postgresql-backup.sh
+        owner: root
+        group: root
+        mode: '0755'
+      tags:
+        - backup
+        - scripts
+
+    - name: Create backup cron job
+      cron:
+        name: "PostgreSQL daily backup"
+        minute: "0"
+        hour: "2"
+        job: "/usr/local/bin/postgresql-backup.sh >> /var/log/postgresql-backup.log 2>&1"
+        user: postgres
+        state: present
+      tags:
+        - backup
+        - cron
+
+    - name: Configure logrotate for PostgreSQL logs
+      copy:
+        content: |
+          /var/log/postgresql/*.log {
+              daily
+              missingok
+              rotate 14
+              compress
+              delaycompress
+              notifempty
+              create 640 postgres postgres
+              sharedscripts
+              postrotate
+                  /bin/kill -HUP `cat /var/run/postgresql/{{ postgresql_version }}-main.pid 2> /dev/null` 2> /dev/null || true
+              endscript
+          }
+        dest: /etc/logrotate.d/postgresql
+        owner: root
+        group: root
+        mode: '0644'
+      tags:
+        - logging
+        - logrotate
+
+    - name: Check PostgreSQL service status
+      systemd:
+        name: "postgresql@{{ postgresql_version }}-main"
+      register: postgresql_status
+      tags:
+        - verify
+
+    - name: Verify PostgreSQL is running and accepting connections
+      shell: sudo -u postgres psql -c "SELECT 1;"
+      register: postgres_ping_result
+      changed_when: false
+      tags:
+        - verify
+
+    - name: Get PostgreSQL version
+      shell: sudo -u postgres psql -c "SELECT version();"
+      register: postgres_version_output
+      changed_when: false
+      tags:
+        - verify
+
+    - name: Display PostgreSQL status information
+      debug:
+        msg: |
+          PostgreSQL Status:
+          - Service Active: {{ postgresql_status.status.ActiveState }}
+          - Service Running: {{ postgresql_status.status.SubState }}
+          - Version: {{ postgres_version_output.stdout_lines[2] if postgres_version_output.stdout_lines|length > 2 else 'Unable to determine' }}
+          - Port: {{ postgresql_port }}
+          - Databases Created: {{ postgresql_databases | map(attribute='name') | join(', ') }}
+      tags:
+        - verify
+
+  handlers:
+    - name: restart postgresql
+      systemd:
+        name: "postgresql@{{ postgresql_version }}-main"
+        state: restarted
+        daemon_reload: yes

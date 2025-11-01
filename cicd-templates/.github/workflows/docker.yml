@@ -1,0 +1,201 @@
+name: 'Docker Build and Push'
+
+on:
+  workflow_call:
+    inputs:
+      dockerfile:
+        description: 'Path to Dockerfile'
+        required: false
+        default: './Dockerfile'
+        type: string
+      context:
+        description: 'Build context'
+        required: false
+        default: '.'
+        type: string
+      build-args:
+        description: 'Build arguments (key=value,key2=value2)'
+        required: false
+        default: ''
+        type: string
+      platforms:
+        description: 'Target platforms'
+        required: false
+        default: 'linux/amd64,linux/arm64'
+        type: string
+      image-name:
+        description: 'Docker image name'
+        required: false
+        default: ''
+        type: string
+      tags:
+        description: 'Additional tags (comma-separated)'
+        required: false
+        default: ''
+        type: string
+      security-scan:
+        description: 'Enable security scanning'
+        required: false
+        default: true
+        type: boolean
+      push-latest:
+        description: 'Push latest tag'
+        required: false
+        default: true
+        type: boolean
+      environment:
+        description: 'Deployment environment'
+        required: false
+        default: 'development'
+        type: string
+    secrets:
+      HARBOR_REGISTRY:
+        required: true
+      HARBOR_USERNAME:
+        required: true
+      HARBOR_PASSWORD:
+        required: true
+      HARBOR_PROJECT:
+        required: true
+
+jobs:
+  docker-build-push:
+    name: 'Docker Build and Push'
+    runs-on: ubuntu-latest
+    outputs:
+      image-url: ${{ steps.build.outputs.image-url }}
+      image-digest: ${{ steps.build.outputs.image-digest }}
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Determine image name'
+        id: image-name
+        run: |
+          if [[ -n "${{ inputs.image-name }}" ]]; then
+            IMAGE_NAME="${{ inputs.image-name }}"
+          else
+            IMAGE_NAME="${GITHUB_REPOSITORY##*/}"
+          fi
+          
+          echo "image-name=$IMAGE_NAME" >> $GITHUB_OUTPUT
+          echo "Image name: $IMAGE_NAME"
+
+      - name: 'Build and push Docker image'
+        id: build
+        uses: ./.github/actions/harbor-push
+        with:
+          registry: ${{ secrets.HARBOR_REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+          project: ${{ secrets.HARBOR_PROJECT }}
+          image-name: ${{ steps.image-name.outputs.image-name }}
+          dockerfile: ${{ inputs.dockerfile }}
+          context: ${{ inputs.context }}
+          build-args: ${{ inputs.build-args }}
+          tags: ${{ inputs.tags }}
+          scan-image: ${{ inputs.security-scan }}
+          push-latest: ${{ inputs.push-latest }}
+
+      - name: 'Generate Docker deployment files'
+        run: |
+          IMAGE_URL="${{ steps.build.outputs.image-url }}"
+          IMAGE_NAME="${{ steps.image-name.outputs.image-name }}"
+          
+          # Create docker-compose.yml
+          cat > docker-compose.yml << EOF
+          version: '3.8'
+          services:
+            ${IMAGE_NAME}:
+              image: ${IMAGE_URL}
+              ports:
+                - "8080:8080"
+              environment:
+                - NODE_ENV=${{ inputs.environment }}
+              restart: unless-stopped
+              labels:
+                - "traefik.enable=true"
+                - "traefik.http.routers.${IMAGE_NAME}.rule=Host(\`${IMAGE_NAME}.local\`)"
+                - "traefik.http.services.${IMAGE_NAME}.loadbalancer.server.port=8080"
+          EOF
+          
+          # Create Kubernetes deployment
+          cat > k8s-deployment.yaml << EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ${IMAGE_NAME}
+            labels:
+              app: ${IMAGE_NAME}
+              version: ${GITHUB_SHA::8}
+              environment: ${{ inputs.environment }}
+          spec:
+            replicas: 3
+            selector:
+              matchLabels:
+                app: ${IMAGE_NAME}
+            template:
+              metadata:
+                labels:
+                  app: ${IMAGE_NAME}
+                  version: ${GITHUB_SHA::8}
+              spec:
+                containers:
+                - name: ${IMAGE_NAME}
+                  image: ${IMAGE_URL}
+                  ports:
+                  - containerPort: 8080
+                  env:
+                  - name: ENVIRONMENT
+                    value: "${{ inputs.environment }}"
+                  resources:
+                    requests:
+                      memory: "256Mi"
+                      cpu: "250m"
+                    limits:
+                      memory: "512Mi"
+                      cpu: "500m"
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ${IMAGE_NAME}-service
+          spec:
+            selector:
+              app: ${IMAGE_NAME}
+            ports:
+            - port: 80
+              targetPort: 8080
+            type: ClusterIP
+          EOF
+          
+          echo "Generated deployment files:"
+          echo "- docker-compose.yml"
+          echo "- k8s-deployment.yaml"
+
+      - name: 'Upload deployment artifacts'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-artifacts
+          path: |
+            docker-compose.yml
+            k8s-deployment.yaml
+            deployment-manifest.yaml
+
+      - name: 'Deployment summary'
+        run: |
+          echo "##  Docker Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image**: ${{ steps.build.outputs.image-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest**: ${{ steps.build.outputs.image-digest }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Platforms**: ${{ inputs.platforms }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit**: ${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Security Scan:" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.build.outputs.vulnerability-report }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Files Generated:" >> $GITHUB_STEP_SUMMARY
+          echo "- docker-compose.yml" >> $GITHUB_STEP_SUMMARY
+          echo "- k8s-deployment.yaml" >> $GITHUB_STEP_SUMMARY

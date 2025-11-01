@@ -1,0 +1,354 @@
+name: 'Go CI/CD Pipeline'
+
+on:
+  workflow_call:
+    inputs:
+      go-version:
+        description: 'Go version to use'
+        required: false
+        default: '1.21'
+        type: string
+      run-tests:
+        description: 'Run unit tests'
+        required: false
+        default: true
+        type: boolean
+      run-benchmarks:
+        description: 'Run benchmarks'
+        required: false
+        default: false
+        type: boolean
+      run-linting:
+        description: 'Run linting (golangci-lint)'
+        required: false
+        default: true
+        type: boolean
+      run-security-scan:
+        description: 'Run security scanning with JFrog Xray'
+        required: false
+        default: true
+        type: boolean
+      build-docker:
+        description: 'Build Docker image'
+        required: false
+        default: true
+        type: boolean
+      deploy-package:
+        description: 'Deploy Go module'
+        required: false
+        default: true
+        type: boolean
+      environment:
+        description: 'Deployment environment'
+        required: false
+        default: 'development'
+        type: string
+    secrets:
+      HARBOR_REGISTRY:
+        required: true
+      HARBOR_USERNAME:
+        required: true
+      HARBOR_PASSWORD:
+        required: true
+      HARBOR_PROJECT:
+        required: true
+      ARTIFACTORY_URL:
+        required: true
+      ARTIFACTORY_USERNAME:
+        required: true
+      ARTIFACTORY_PASSWORD:
+        required: true
+      ARTIFACTORY_GO_REPO:
+        required: true
+
+env:
+  CGO_ENABLED: 0
+  GOOS: linux
+  GOARCH: amd64
+
+jobs:
+  build-and-test:
+    name: 'Build and Test'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      module-name: ${{ steps.metadata.outputs.module-name }}
+      binary-name: ${{ steps.metadata.outputs.binary-name }}
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 'Setup Go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: 'Extract project metadata'
+        id: metadata
+        run: |
+          # Get module name from go.mod
+          if [[ -f "go.mod" ]]; then
+            MODULE_NAME=$(grep '^module ' go.mod | cut -d' ' -f2)
+            BINARY_NAME=$(basename "$MODULE_NAME")
+          else
+            MODULE_NAME="${GITHUB_REPOSITORY}"
+            BINARY_NAME="${GITHUB_REPOSITORY##*/}"
+          fi
+          
+          echo "module-name=$MODULE_NAME" >> $GITHUB_OUTPUT
+          echo "binary-name=$BINARY_NAME" >> $GITHUB_OUTPUT
+          
+          echo "Module: $MODULE_NAME"
+          echo "Binary: $BINARY_NAME"
+
+      - name: 'Determine version'
+        id: version
+        run: |
+          # Use git tag if available, otherwise generate version
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION=$(git describe --tags --always 2>/dev/null || echo "v1.0.0")
+            if [[ ! "$VERSION" =~ ^v ]]; then
+              VERSION="v1.0.0-${VERSION}"
+            fi
+            VERSION="${VERSION}-${GITHUB_SHA::8}"
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: 'Cache Go modules'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ inputs.go-version }}-${{ hashFiles('**/go.sum') }}
+
+      - name: 'Download dependencies'
+        run: go mod download
+
+      - name: 'Verify dependencies'
+        run: go mod verify
+
+      - name: 'Run linting'
+        if: inputs.run-linting
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+          args: --timeout=5m --config=.golangci.yml
+        continue-on-error: false
+
+      - name: 'JFrog Xray security scan'
+        if: inputs.run-security-scan
+        run: |
+          # Install JFrog CLI
+          curl -fL https://getcli.jfrog.io | sh
+          sudo mv jfrog /usr/local/bin/
+          
+          # Configure JFrog CLI
+          jfrog config add artifactory \
+            --url="${{ secrets.ARTIFACTORY_URL }}" \
+            --user="${{ secrets.ARTIFACTORY_USERNAME }}" \
+            --password="${{ secrets.ARTIFACTORY_PASSWORD }}" \
+            --interactive=false
+          
+          # Scan Go dependencies
+          echo "##  JFrog Xray Security Scan" >> $GITHUB_STEP_SUMMARY
+          
+          # Audit Go modules
+          jfrog audit --go --format=json > xray-report.json || true
+          
+          # Parse results
+          CRITICAL=$(cat xray-report.json | jq '.vulnerabilities[]? | select(.severity=="Critical") | .summary' | wc -l 2>/dev/null || echo "0")
+          HIGH=$(cat xray-report.json | jq '.vulnerabilities[]? | select(.severity=="High") | .summary' | wc -l 2>/dev/null || echo "0")
+          MEDIUM=$(cat xray-report.json | jq '.vulnerabilities[]? | select(.severity=="Medium") | .summary' | wc -l 2>/dev/null || echo "0")
+          
+          echo " **Vulnerability Scan Results:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Critical: $CRITICAL" >> $GITHUB_STEP_SUMMARY
+          echo "- High: $HIGH" >> $GITHUB_STEP_SUMMARY
+          echo "- Medium: $MEDIUM" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ $CRITICAL -gt 0 ]]; then
+            echo "::warning title=Security Alert::$CRITICAL critical vulnerabilities found in Go modules"
+          fi
+
+      - name: 'Run tests'
+        if: inputs.run-tests
+        run: |
+          echo "##  Test Results" >> $GITHUB_STEP_SUMMARY
+          
+          # Run tests with coverage
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+          
+          # Generate coverage report
+          go tool cover -html=coverage.out -o coverage.html
+          
+          # Get coverage percentage
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+          echo "**Test Coverage**: $COVERAGE" >> $GITHUB_STEP_SUMMARY
+
+      - name: 'Run benchmarks'
+        if: inputs.run-benchmarks
+        run: |
+          echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          go test -bench=. -benchmem ./... | tee benchmark.txt
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat benchmark.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: 'Build binary'
+        run: |
+          # Build for multiple architectures
+          echo "Building binaries..."
+          
+          # Linux AMD64
+          GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=${{ steps.version.outputs.version }}" -o dist/linux-amd64/${{ steps.metadata.outputs.binary-name }} ./cmd/...
+          
+          # Linux ARM64
+          GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=${{ steps.version.outputs.version }}" -o dist/linux-arm64/${{ steps.metadata.outputs.binary-name }} ./cmd/...
+          
+          # Windows AMD64
+          GOOS=windows GOARCH=amd64 go build -ldflags="-X main.version=${{ steps.version.outputs.version }}" -o dist/windows-amd64/${{ steps.metadata.outputs.binary-name }}.exe ./cmd/...
+          
+          # macOS AMD64
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-X main.version=${{ steps.version.outputs.version }}" -o dist/darwin-amd64/${{ steps.metadata.outputs.binary-name }} ./cmd/...
+          
+          # macOS ARM64
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-X main.version=${{ steps.version.outputs.version }}" -o dist/darwin-arm64/${{ steps.metadata.outputs.binary-name }} ./cmd/...
+
+      - name: 'Upload test results'
+        if: inputs.run-tests && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            coverage.out
+            coverage.html
+            benchmark.txt
+
+      - name: 'Upload build artifacts'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            dist/
+            xray-report.json
+
+  deploy-package:
+    name: 'Deploy Go Module'
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: inputs.deploy-package && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Download build artifacts'
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+
+      - name: 'Create Go module archive'
+        run: |
+          # Create module archive
+          mkdir -p module-archive
+          
+          # Create go.mod and go.sum for the module
+          cp go.mod go.sum module-archive/ 2>/dev/null || true
+          
+          # Copy source files
+          find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" | cpio -pdm module-archive/
+          
+          # Create zip archive
+          cd module-archive
+          zip -r "../${{ needs.build-and-test.outputs.module-name }}-${{ needs.build-and-test.outputs.version }}.zip" .
+          cd ..
+
+      - name: 'Deploy to Artifactory'
+        uses: ./.github/actions/artifactory-push
+        with:
+          artifactory-url: ${{ secrets.ARTIFACTORY_URL }}
+          username: ${{ secrets.ARTIFACTORY_USERNAME }}
+          password: ${{ secrets.ARTIFACTORY_PASSWORD }}
+          repository: ${{ secrets.ARTIFACTORY_GO_REPO }}
+          package-type: 'go'
+          package-path: './${{ needs.build-and-test.outputs.module-name }}-${{ needs.build-and-test.outputs.version }}.zip'
+          package-name: ${{ needs.build-and-test.outputs.module-name }}
+          package-version: ${{ needs.build-and-test.outputs.version }}
+          build-properties: 'environment=${{ inputs.environment }};go.version=${{ inputs.go-version }}'
+          scan-package: ${{ inputs.run-security-scan }}
+
+  build-docker:
+    name: 'Build and Push Docker Image'
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: inputs.build-docker && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+    
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Download build artifacts'
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+
+      - name: 'Build and push to Harbor'
+        uses: ./.github/actions/harbor-push
+        with:
+          registry: ${{ secrets.HARBOR_REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+          project: ${{ secrets.HARBOR_PROJECT }}
+          image-name: ${{ needs.build-and-test.outputs.binary-name }}
+          dockerfile: './Dockerfile'
+          context: '.'
+          build-args: |
+            VERSION=${{ needs.build-and-test.outputs.version }}
+            GO_VERSION=${{ inputs.go-version }}
+            BINARY_NAME=${{ needs.build-and-test.outputs.binary-name }}
+          tags: ${{ inputs.environment }}
+          scan-image: ${{ inputs.run-security-scan }}
+
+  deploy:
+    name: 'Deploy Application'
+    runs-on: ubuntu-latest
+    needs: [build-and-test, deploy-package, build-docker]
+    if: always() && needs.build-and-test.result == 'success' && (needs.deploy-package.result == 'success' || needs.deploy-package.result == 'skipped') && (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped')
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: 'Deployment summary'
+        run: |
+          echo "## 🐹 Go Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Application**: ${{ needs.build-and-test.outputs.binary-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Module**: ${{ needs.build-and-test.outputs.module-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: ${{ needs.build-and-test.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Go Version**: ${{ inputs.go-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit**: ${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Components Deployed:" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ inputs.deploy-package }}" == "true" ]]; then
+            echo "- Go Module to Artifactory" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ inputs.build-docker }}" == "true" ]]; then
+            echo "- Docker Image to Harbor" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Artifacts:" >> $GITHUB_STEP_SUMMARY
+          echo "- Linux AMD64 binary" >> $GITHUB_STEP_SUMMARY
+          echo "- Linux ARM64 binary" >> $GITHUB_STEP_SUMMARY
+          echo "- Windows AMD64 binary" >> $GITHUB_STEP_SUMMARY
+          echo "- macOS AMD64 binary" >> $GITHUB_STEP_SUMMARY
+          echo "- macOS ARM64 binary" >> $GITHUB_STEP_SUMMARY

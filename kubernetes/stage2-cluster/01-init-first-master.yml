@@ -1,0 +1,159 @@
+---
+- name: Initialize First Kubernetes Master Node
+  hosts: k8s_masters[0]
+  become: yes
+  vars_files:
+    - ../vars.yml
+    - ../vault.yml
+
+  tasks:
+    - name: Restart HAProxy load balancer
+      systemd:
+        name: haproxy
+        state: restarted
+      delegate_to: haproxy-1
+      run_once: true
+      tags:
+        - loadbalancer
+        - init
+
+    - name: Wait for HAProxy to be ready
+      wait_for:
+        host: 10.100.10.210
+        port: 6443
+        timeout: 30
+      run_once: true
+      tags:
+        - loadbalancer
+        - init
+
+    - name: Check if cluster is already initialized
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: cluster_initialized
+
+    - name: Create kubeadm configuration file
+      template:
+        src: kubeadm-config.yml.j2
+        dest: /tmp/kubeadm-config.yml
+        mode: '0600'
+      when: not cluster_initialized.stat.exists
+      tags:
+        - master
+        - init
+
+    - name: Initialize Kubernetes cluster
+      shell: |
+        kubeadm init --config=/tmp/kubeadm-config.yml --upload-certs
+      register: kubeadm_init_output
+      when: not cluster_initialized.stat.exists
+      tags:
+        - master
+        - init
+
+    - name: Create .kube directory for root
+      file:
+        path: /root/.kube
+        state: directory
+        mode: '0755'
+      tags:
+        - master
+        - config
+
+    - name: Copy admin.conf to .kube/config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: yes
+        owner: root
+        mode: '0600'
+      tags:
+        - master
+        - config
+
+    - name: Install Flannel CNI plugin
+      shell: |
+        kubectl apply -f https://github.com/flannel-io/flannel/releases/download/{{ flannel_version }}/kube-flannel.yml
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: flannel_install
+      when: cni_plugin == "flannel"
+      tags:
+        - master
+        - cni
+
+    - name: Wait for all system pods to be ready
+      shell: |
+        kubectl wait --for=condition=Ready pod --all -n kube-system --timeout=300s
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: pods_ready
+      retries: 5
+      delay: 30
+      until: pods_ready.rc == 0
+      tags:
+        - master
+        - health
+
+    - name: Get cluster join command for workers
+      shell: kubeadm token create --print-join-command
+      register: join_command_workers
+      tags:
+        - master
+        - tokens
+
+    - name: Get cluster join command for masters
+      shell: |
+        kubeadm init phase upload-certs --upload-certs | tail -n 1
+      register: certificate_key
+      tags:
+        - master
+        - tokens
+
+    - name: Create join command for additional masters
+      set_fact:
+        join_command_masters: "{{ join_command_workers.stdout }} --control-plane --certificate-key {{ certificate_key.stdout }}"
+      tags:
+        - master
+        - tokens
+
+    - name: Save join commands to local files
+      copy:
+        content: "{{ item.content }}"
+        dest: "/tmp/{{ item.filename }}"
+        mode: '0600'
+      loop:
+        - { content: "{{ join_command_workers.stdout }}", filename: "join-command-workers" }
+        - { content: "{{ join_command_masters }}", filename: "join-command-masters" }
+      tags:
+        - master
+        - tokens
+
+    - name: Download admin.conf for local kubectl access
+      fetch:
+        src: /etc/kubernetes/admin.conf
+        dest: ./kubeconfig
+        flat: yes
+      tags:
+        - master
+        - download
+
+    - name: Display cluster initialization status
+      debug:
+        msg: |
+          Kubernetes Master Initialization Complete:
+          =========================================
+          - Cluster Name: {{ cluster_name }}
+          - Master Node: {{ inventory_hostname }}
+          - API Server: https://{{ haproxy_vip }}:{{ haproxy_api_port }}
+          - CNI Plugin: {{ cni_plugin }}
+          - Pod Network CIDR: {{ pod_network_cidr }}
+          - Service Network CIDR: {{ service_network_cidr }}
+          
+          Next Steps:
+          1. Join additional masters using: {{ join_command_masters }}
+          2. Join workers using: {{ join_command_workers.stdout }}
+          3. Download kubeconfig from ./kubeconfig for local access
+      tags:
+        - master
+        - info

@@ -1,0 +1,69 @@
+# Kubernetes Vault Configuration Example
+# Run: ansible-vault encrypt vault.yml
+
+# Cluster Certificates and Keys (will be generated during deployment)
+cluster_ca_key: ""  # Generated during cluster init
+cluster_ca_cert: ""  # Generated during cluster init
+
+# Service Account Keys
+service_account_key: ""  # Generated during cluster init
+
+# ETCD Encryption Key
+etcd_encryption_key: "your-etcd-encryption-key-32-chars"
+
+# Cluster Admin Token
+cluster_admin_token: "your-cluster-admin-token-here"
+
+# Dashboard Admin Token
+dashboard_admin_token: "your-dashboard-admin-token-here"
+
+# Registry Credentials (if using private registry)
+registry_username: "your-registry-username"
+registry_password: "your-registry-password"
+registry_email: "your-email@example.com"
+
+# Container Registry Pull Secrets
+docker_config_json: |
+  {
+    "auths": {
+      "your-registry.com": {
+        "username": "your-username",
+        "password": "your-password",
+        "email": "your-email@example.com",
+        "auth": "base64-encoded-username:password"
+      }
+    }
+  }
+
+# Secret for cluster communication
+cluster_secret: "your-cluster-secret-key"
+
+# Encryption keys for secrets
+secrets_encryption_key: "your-secrets-encryption-key-32-chars"
+
+# Webhook tokens
+webhook_token: "your-webhook-token-here"
+
+# Backup encryption password
+backup_encryption_password: "your-backup-encryption-password"
+
+# Certificate Manager (if enabled)
+cert_manager_email: "admin@example.com"
+
+# Ingress Controller Secrets
+ingress_tls_cert: ""  # TLS certificate for ingress
+ingress_tls_key: ""   # TLS private key for ingress
+
+# Monitoring Credentials
+monitoring_admin_password: "your-monitoring-admin-password"
+grafana_admin_password: "your-grafana-admin-password"
+
+# Cloud Provider Credentials (if using cloud provider)
+cloud_provider_config: ""
+
+# Additional secrets for applications
+app_secrets:
+  database_password: "your-database-password"
+  redis_password: "your-redis-password"
+  minio_access_key: "your-minio-access-key"
+  minio_secret_key: "your-minio-secret-key"

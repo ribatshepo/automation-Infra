@@ -1,0 +1,99 @@
+---
+# MinIO Configuration Variables
+
+# MinIO Installation
+minio_version: "RELEASE.2024-10-29T16-01-48Z"
+minio_user: "minio"
+minio_group: "minio"
+minio_home: "/opt/minio"
+minio_data_dir: "/data/minio"
+minio_config_dir: "/etc/minio"
+
+# MinIO Server Configuration
+minio_bind_address: "0.0.0.0"
+minio_port: 9000
+minio_console_port: 9001
+minio_scheme: "http"
+
+# MinIO Data Storage
+minio_storage_path: "{{ minio_data_dir }}"
+minio_storage_class: "STANDARD"
+
+# MinIO Performance Settings
+minio_cache_drives: []
+minio_cache_expiry: "90"
+minio_cache_quota: "80"
+
+# MinIO Logging
+minio_log_level: "INFO"
+minio_log_file: "/var/log/minio/minio.log"
+minio_audit_log: "/var/log/minio/audit.log"
+
+# MinIO Security
+minio_tls_enabled: false
+minio_tls_cert_file: ""
+minio_tls_key_file: ""
+
+# MinIO Console (Web UI)
+minio_console_enabled: true
+minio_console_bind_address: "0.0.0.0"
+
+# MinIO Backup Configuration
+minio_backup_enabled: true
+minio_backup_dir: "/backup/minio"
+minio_backup_retention_days: 30
+minio_backup_schedule: "0 3 * * *"  # Daily at 3 AM
+
+# MinIO Health Check
+minio_health_check_enabled: true
+minio_health_check_interval: "30s"
+
+# MinIO Notification (optional)
+minio_notifications_enabled: false
+
+# MinIO Region and Site
+minio_region: "us-east-1"
+minio_site_name: "main"
+minio_site_region: "{{ minio_region }}"
+
+# MinIO Browser Settings
+minio_browser_enabled: true
+minio_browser_redirect_url: ""
+
+# MinIO API Settings
+minio_api_requests_max: 10000
+minio_api_requests_deadline: "10s"
+
+# MinIO Disk Usage Settings
+minio_disk_usage_threshold: 90
+
+# Default Buckets to Create
+minio_default_buckets:
+  - name: "data"
+    policy: "private"
+  - name: "backups"
+    policy: "private"
+  - name: "logs"
+    policy: "private"
+  - name: "uploads"
+    policy: "public-read"
+
+# MinIO Client (mc) Configuration
+minio_client_enabled: true
+minio_client_version: "RELEASE.2024-10-29T16-01-48Z"
+
+# Firewall Configuration
+minio_firewall_enabled: true
+minio_firewall_allowed_ips:
+  - "10.100.10.0/24"  # Internal network
+  - "127.0.0.1"       # Localhost
+
+# System Resources
+minio_max_open_files: 65536
+minio_max_processes: 32768
+
+# Environment Variables
+minio_environment_vars:
+  MINIO_PROMETHEUS_AUTH_TYPE: "public"
+  MINIO_SCANNER_MODE: "on"
+  MINIO_API_CORS_ALLOW_ORIGIN: "*"

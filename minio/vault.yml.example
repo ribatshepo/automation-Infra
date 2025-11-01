@@ -1,0 +1,32 @@
+# MinIO Vault Configuration Example
+# Run: ansible-vault encrypt vault.yml
+
+# MinIO Root Credentials
+minio_root_user: "admin"
+minio_root_password: "your-strong-admin-password-here"
+
+# MinIO Application Users
+minio_app_user: "appuser"
+minio_app_password: "your-strong-app-password-here"
+
+# MinIO Service Account Credentials
+minio_service_account_access_key: "service-access-key"
+minio_service_account_secret_key: "service-secret-key"
+
+# MinIO Read-Only User
+minio_readonly_user: "readonly"
+minio_readonly_password: "your-strong-readonly-password-here"
+
+# MinIO Backup User
+minio_backup_user: "backup"
+minio_backup_password: "your-strong-backup-password-here"
+
+# MinIO Console JWT Secret
+minio_console_jwt_secret: "your-jwt-secret-key-here"
+
+# MinIO Webhook Secrets (if notifications enabled)
+minio_webhook_secret: "your-webhook-secret-here"
+
+# Database Connection (if using external metadata)
+minio_db_user: "minio_db"
+minio_db_password: "your-db-password-here"

@@ -1,0 +1,105 @@
+---
+- name: Create SSL certificate directory
+  file:
+    path: "{{ harbor_certs_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Generate private key for CA
+  openssl_privatekey:
+    path: "{{ harbor_certs_dir }}/ca-key.pem"
+    size: 4096
+    type: RSA
+    mode: '0600'
+
+- name: Generate CA certificate signing request
+  openssl_csr:
+    path: "{{ harbor_certs_dir }}/ca.csr"
+    privatekey_path: "{{ harbor_certs_dir }}/ca-key.pem"
+    country_name: "{{ harbor_ssl_country }}"
+    state_or_province_name: "{{ harbor_ssl_state }}"
+    locality_name: "{{ harbor_ssl_city }}"
+    organization_name: "{{ harbor_ssl_organization }}"
+    organizational_unit_name: "{{ harbor_ssl_organizational_unit }}"
+    common_name: "Harbor CA"
+    basic_constraints:
+      - "CA:TRUE"
+    key_usage:
+      - digitalSignature
+      - keyEncipherment
+      - keyCertSign
+
+- name: Generate CA certificate
+  openssl_certificate:
+    path: "{{ harbor_certs_dir }}/ca.crt"
+    privatekey_path: "{{ harbor_certs_dir }}/ca-key.pem"
+    csr_path: "{{ harbor_certs_dir }}/ca.csr"
+    provider: selfsigned
+    selfsigned_not_after: "+3650d"
+    mode: '0644'
+
+- name: Generate private key for Harbor
+  openssl_privatekey:
+    path: "{{ harbor_ssl_key_path }}"
+    size: 4096
+    type: RSA
+    mode: '0600'
+
+- name: Generate Harbor certificate signing request
+  openssl_csr:
+    path: "{{ harbor_certs_dir }}/harbor.csr"
+    privatekey_path: "{{ harbor_ssl_key_path }}"
+    country_name: "{{ harbor_ssl_country }}"
+    state_or_province_name: "{{ harbor_ssl_state }}"
+    locality_name: "{{ harbor_ssl_city }}"
+    organization_name: "{{ harbor_ssl_organization }}"
+    organizational_unit_name: "{{ harbor_ssl_organizational_unit }}"
+    common_name: "{{ harbor_ssl_common_name }}"
+    subject_alt_name:
+      - "DNS:{{ harbor_hostname }}"
+      - "DNS:localhost"
+      - "IP:{{ ansible_default_ipv4.address }}"
+      - "IP:127.0.0.1"
+
+- name: Generate Harbor certificate
+  openssl_certificate:
+    path: "{{ harbor_ssl_cert_path }}"
+    privatekey_path: "{{ harbor_ssl_key_path }}"
+    csr_path: "{{ harbor_certs_dir }}/harbor.csr"
+    ownca_path: "{{ harbor_certs_dir }}/ca.crt"
+    ownca_privatekey_path: "{{ harbor_certs_dir }}/ca-key.pem"
+    provider: ownca
+    ownca_not_after: "+365d"
+    mode: '0644'
+
+- name: Create Docker certificate directory
+  file:
+    path: "/etc/docker/certs.d/{{ harbor_hostname }}:{{ harbor_https_port }}"
+    state: directory
+    mode: '0755'
+
+- name: Copy CA certificate to Docker certs directory
+  copy:
+    src: "{{ harbor_certs_dir }}/ca.crt"
+    dest: "/etc/docker/certs.d/{{ harbor_hostname }}:{{ harbor_https_port }}/ca.crt"
+    remote_src: yes
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart docker
+
+- name: Add CA certificate to system trust store
+  copy:
+    src: "{{ harbor_certs_dir }}/ca.crt"
+    dest: "/usr/local/share/ca-certificates/harbor-ca.crt"
+    remote_src: yes
+    owner: root
+    group: root
+    mode: '0644'
+  notify: update ca certificates
+
+- name: Update CA certificates
+  command: update-ca-certificates
+  changed_when: false

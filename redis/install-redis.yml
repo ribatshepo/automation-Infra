@@ -1,0 +1,321 @@
+---
+- name: Install and Configure Redis Server
+  hosts: redis
+  become: true
+  vars_files:
+    - vars.yml
+    - vault.yml
+  
+  handlers:
+    - name: restart redis
+      systemd:
+        name: redis-server
+        state: restarted
+        enabled: true
+      
+    - name: reload redis
+      systemd:
+        name: redis-server
+        state: reloaded
+
+  tasks:
+    - name: Update apt package cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+      tags:
+        - packages
+
+    - name: Install required packages for Redis
+      apt:
+        name:
+          - software-properties-common
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - build-essential
+          - tcl
+        state: present
+      tags:
+        - packages
+
+    - name: Install Redis from Ubuntu repositories
+      apt:
+        name:
+          - redis-server
+          - redis-tools
+        state: present
+        update_cache: true
+      tags:
+        - packages
+        - redis
+
+    - name: Create Redis system user and group
+      user:
+        name: redis
+        group: redis
+        system: true
+        shell: /bin/false
+        home: /var/lib/redis
+        create_home: true
+        state: present
+      tags:
+        - redis
+        - security
+
+    - name: Create Redis configuration directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: redis
+        group: redis
+        mode: '0755'
+      loop:
+        - /etc/redis
+        - /var/lib/redis
+        - /var/log/redis
+        - /run/redis
+      tags:
+        - redis
+        - config
+
+    - name: Configure Redis main settings
+      lineinfile:
+        path: /etc/redis/redis.conf
+        regexp: '^#?\s*{{ item.key }}\s'
+        line: '{{ item.key }} {{ item.value }}'
+        backup: true
+      loop:
+        - { key: 'bind', value: '{{ redis_bind_address | default("127.0.0.1") }}' }
+        - { key: 'port', value: '{{ redis_port | default(6379) }}' }
+        - { key: 'dir', value: '{{ redis_dir | default("/var/lib/redis") }}' }
+        - { key: 'logfile', value: '{{ redis_logfile | default("/var/log/redis/redis-server.log") }}' }
+        - { key: 'daemonize', value: 'yes' }
+        - { key: 'supervised', value: 'systemd' }
+      notify: restart redis
+      tags:
+        - redis
+        - config
+
+    - name: Disable ACL file temporarily
+      lineinfile:
+        path: /etc/redis/redis.conf
+        regexp: '^aclfile'
+        line: '# aclfile disabled for initial deployment'
+        backup: true
+      notify: restart redis
+      tags:
+        - redis
+        - config
+
+    - name: Ensure Redis service is stopped initially
+      systemd:
+        name: redis-server
+        state: stopped
+      ignore_errors: true
+      tags:
+        - redis
+        - service
+
+    - name: Remove existing Redis systemd override if present
+      file:
+        path: /etc/systemd/system/redis-server.service.d
+        state: absent
+      tags:
+        - redis
+        - systemd
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: true
+      tags:
+        - redis
+        - systemd
+
+    - name: Configure Redis log rotation
+      copy:
+        content: |
+          /var/log/redis/*.log {
+              weekly
+              missingok
+              rotate 52
+              compress
+              delaycompress
+              notifempty
+              create 640 redis redis
+              postrotate
+                  if [ -f /var/run/redis/redis-server.pid ]; then
+                      kill -USR1 `cat /var/run/redis/redis-server.pid`
+                  fi
+              endscript
+          }
+        dest: /etc/logrotate.d/redis-server
+        mode: '0644'
+      tags:
+        - redis
+        - logging
+
+    - name: Set Redis memory overcommit settings
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_set: true
+        reload: true
+      loop:
+        - { name: 'vm.overcommit_memory', value: '1' }
+        - { name: 'net.core.somaxconn', value: '65535' }
+      tags:
+        - redis
+        - tuning
+
+    - name: Disable transparent huge pages for Redis
+      copy:
+        content: |
+          #!/bin/bash
+          echo never > /sys/kernel/mm/transparent_hugepage/enabled
+          echo never > /sys/kernel/mm/transparent_hugepage/defrag
+        dest: /etc/rc.local
+        mode: '0755'
+      tags:
+        - redis
+        - tuning
+
+    - name: Create Redis authentication configuration
+      copy:
+        content: |
+          # Redis ACL configuration will be configured later
+          # For now using basic authentication
+        dest: /etc/redis/users.acl
+        owner: redis
+        group: redis
+        mode: '0600'
+      when: false  # Disable for now
+      notify: restart redis
+      tags:
+        - redis
+        - security
+
+    - name: Ensure Redis service is running and enabled
+      systemd:
+        name: redis-server
+        state: started
+        enabled: true
+        daemon_reload: true
+      tags:
+        - redis
+        - service
+
+    - name: Wait for Redis to be ready
+      wait_for:
+        host: "{{ redis_bind_address | default('127.0.0.1') }}"
+        port: "{{ redis_port | default(6379) }}"
+        delay: 5
+        timeout: 30
+      tags:
+        - redis
+        - service
+
+    - name: Test Redis connection (with auth)
+      command: redis-cli -h {{ redis_bind_address | default('127.0.0.1') }} -p {{ redis_port | default(6379) }} -a {{ redis_app_password }} ping
+      register: redis_ping_test
+      when: redis_auth_enabled | default(true)
+      no_log: true
+      tags:
+        - redis
+        - test
+
+    - name: Test Redis connection (without auth)
+      command: redis-cli -h {{ redis_bind_address | default('127.0.0.1') }} -p {{ redis_port | default(6379) }} ping
+      register: redis_ping_test_no_auth
+      when: not redis_auth_enabled | default(true)
+      tags:
+        - redis
+        - test
+
+    - name: Create Redis backup directory
+      file:
+        path: /var/backups/redis
+        state: directory
+        owner: redis
+        group: redis
+        mode: '0750'
+      tags:
+        - redis
+        - backup
+
+    - name: Create Redis backup script
+      copy:
+        content: |
+          #!/bin/bash
+          # Redis Backup Script
+          
+          BACKUP_DIR="/var/backups/redis"
+          DATE=$(date +%Y%m%d_%H%M%S)
+          REDIS_CLI="/usr/bin/redis-cli"
+          
+          # Create backup directory if it doesn't exist
+          mkdir -p "$BACKUP_DIR"
+          
+          # Perform Redis backup
+          echo "Starting Redis backup at $(date)"
+          
+          # Save current Redis data
+          $REDIS_CLI -h {{ redis_bind_address | default('127.0.0.1') }} -p {{ redis_port | default(6379) }} {% if redis_auth_enabled | default(true) %}-a {{ redis_app_password }}{% endif %} BGSAVE
+          
+          # Wait for background save to complete
+          while [ $($REDIS_CLI -h {{ redis_bind_address | default('127.0.0.1') }} -p {{ redis_port | default(6379) }} {% if redis_auth_enabled | default(true) %}-a {{ redis_app_password }}{% endif %} LASTSAVE) -eq $($REDIS_CLI -h {{ redis_bind_address | default('127.0.0.1') }} -p {{ redis_port | default(6379) }} {% if redis_auth_enabled | default(true) %}-a {{ redis_app_password }}{% endif %} LASTSAVE) ]; do
+              sleep 1
+          done
+          
+          # Copy the dump file with timestamp
+          cp /var/lib/redis/dump.rdb "$BACKUP_DIR/redis_backup_$DATE.rdb"
+          
+          # Compress the backup
+          gzip "$BACKUP_DIR/redis_backup_$DATE.rdb"
+          
+          # Remove backups older than 7 days
+          find "$BACKUP_DIR" -name "redis_backup_*.rdb.gz" -mtime +7 -delete
+          
+          echo "Redis backup completed at $(date)"
+          echo "Backup saved as: $BACKUP_DIR/redis_backup_$DATE.rdb.gz"
+        dest: /usr/local/bin/redis-backup.sh
+        mode: '0755'
+        owner: root
+        group: root
+      tags:
+        - redis
+        - backup
+
+    - name: Create Redis backup cron job
+      cron:
+        name: "Redis daily backup"
+        minute: "0"
+        hour: "2"
+        job: "/usr/local/bin/redis-backup.sh >> /var/log/redis/backup.log 2>&1"
+        user: root
+      tags:
+        - redis
+        - backup
+
+    - name: Get service facts
+      service_facts:
+      tags:
+        - redis
+        - info
+
+    - name: Display Redis status information
+      debug:
+        msg: |
+          Redis Status:
+          - Service Status: {{ ansible_facts.services['redis-server.service'].state | default('unknown') }}
+          - Service Enabled: {{ ansible_facts.services['redis-server.service'].status | default('unknown') }}
+          - Bind Address: {{ redis_bind_address | default('127.0.0.1') }}
+          - Port: {{ redis_port | default(6379) }}
+          - Authentication: {{ 'Enabled' if redis_auth_enabled | default(true) else 'Disabled' }}
+          - Connection Test: {{ redis_ping_test.stdout | default(redis_ping_test_no_auth.stdout) | default('Failed') }}
+      tags:
+        - redis
+        - info

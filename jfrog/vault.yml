@@ -1,0 +1,27 @@
+# JFrog Artifactory Vault Configuration
+# Encrypt this file using: ansible-vault encrypt vault.yml
+
+# Admin Credentials
+vault_artifactory_admin_password: "Admin123!"
+vault_artifactory_access_token: "artifactory-access-token-123"
+
+# Database Credentials
+vault_artifactory_db_user: "artifactory"
+vault_artifactory_db_password: "ArtifactoryDB123!"
+
+# SSL Configuration
+vault_artifactory_keystore_password: "KeyStore123!"
+
+# License Key (for Pro versions)
+vault_artifactory_license_key: ""
+
+# Integration Tokens
+vault_artifactory_xray_token: ""
+vault_artifactory_distribution_token: ""
+
+# External Storage (S3/Azure)
+vault_artifactory_s3_access_key: ""
+vault_artifactory_s3_secret_key: ""
+
+# LDAP Configuration
+vault_artifactory_ldap_bind_password: ""

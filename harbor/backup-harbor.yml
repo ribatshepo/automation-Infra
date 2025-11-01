@@ -1,0 +1,159 @@
+---
+- name: Backup Harbor Container Registry
+  hosts: registries
+  become: yes
+  gather_facts: yes
+  vars_files:
+    - vars.yml
+    - vault.yml
+
+  vars:
+    backup_timestamp: "{{ ansible_date_time.epoch }}"
+    backup_dir: "/backup/harbor"
+    backup_file: "harbor-backup-{{ backup_timestamp }}.tar.gz"
+
+  tasks:
+    - name: Create backup directory
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Stop Harbor services before backup
+      systemd:
+        name: harbor
+        state: stopped
+
+    - name: Create database backup
+      block:
+        - name: Export Harbor database
+          shell: |
+            docker run --rm \
+              --network harbor_harbor \
+              -e PGPASSWORD='{{ harbor_db_password }}' \
+              postgres:13-alpine \
+              pg_dump -h harbor-db -U {{ harbor_db_username }} {{ harbor_db_name }} > {{ backup_dir }}/harbor-db-{{ backup_timestamp }}.sql
+          args:
+            creates: "{{ backup_dir }}/harbor-db-{{ backup_timestamp }}.sql"
+
+        - name: Compress database backup
+          archive:
+            path: "{{ backup_dir }}/harbor-db-{{ backup_timestamp }}.sql"
+            dest: "{{ backup_dir }}/harbor-db-{{ backup_timestamp }}.sql.gz"
+            format: gz
+            remove: yes
+
+    - name: Backup Harbor configuration and data
+      block:
+        - name: Create temporary backup staging area
+          file:
+            path: "{{ backup_dir }}/staging"
+            state: directory
+            mode: '0755'
+
+        - name: Copy Harbor configuration
+          copy:
+            src: "{{ harbor_install_dir }}/harbor/"
+            dest: "{{ backup_dir }}/staging/harbor-config/"
+            remote_src: yes
+
+        - name: Copy Harbor data directory
+          copy:
+            src: "{{ harbor_data_dir }}/"
+            dest: "{{ backup_dir }}/staging/harbor-data/"
+            remote_src: yes
+
+        - name: Copy SSL certificates
+          copy:
+            src: "{{ harbor_ssl_cert_dir }}/"
+            dest: "{{ backup_dir }}/staging/ssl-certs/"
+            remote_src: yes
+
+        - name: Create backup metadata file
+          copy:
+            content: |
+              Harbor Backup Information
+              =========================
+              Backup Date: {{ ansible_date_time.iso8601 }}
+              Harbor Version: {{ harbor_version }}
+              Hostname: {{ inventory_hostname }}
+              Harbor URL: {{ harbor_base_url }}
+              Backup Components:
+              - Database backup: harbor-db-{{ backup_timestamp }}.sql.gz
+              - Configuration files: harbor-config/
+              - Registry data: harbor-data/
+              - SSL certificates: ssl-certs/
+              
+              Restore Instructions:
+              1. Extract backup: tar -xzf {{ backup_file }}
+              2. Stop Harbor: systemctl stop harbor
+              3. Restore database from SQL backup
+              4. Copy configuration and data to appropriate locations
+              5. Start Harbor: systemctl start harbor
+            dest: "{{ backup_dir }}/staging/backup-info.txt"
+
+        - name: Create compressed backup archive
+          archive:
+            path: 
+              - "{{ backup_dir }}/staging/"
+              - "{{ backup_dir }}/harbor-db-{{ backup_timestamp }}.sql.gz"
+            dest: "{{ backup_dir }}/{{ backup_file }}"
+            format: gz
+
+        - name: Remove staging directory
+          file:
+            path: "{{ backup_dir }}/staging"
+            state: absent
+
+        - name: Remove temporary database backup
+          file:
+            path: "{{ backup_dir }}/harbor-db-{{ backup_timestamp }}.sql.gz"
+            state: absent
+
+    - name: Start Harbor services after backup
+      systemd:
+        name: harbor
+        state: started
+
+    - name: Wait for Harbor to be ready
+      uri:
+        url: "{{ harbor_base_url }}/api/v2.0/systeminfo"
+        method: GET
+        status_code: 200
+        timeout: 30
+        validate_certs: "{{ harbor_ssl_verify }}"
+      retries: 10
+      delay: 15
+
+    - name: Set backup file permissions
+      file:
+        path: "{{ backup_dir }}/{{ backup_file }}"
+        mode: '0600'
+
+    - name: Get backup file info
+      stat:
+        path: "{{ backup_dir }}/{{ backup_file }}"
+      register: backup_file_info
+
+    - name: Display backup completion status
+      debug:
+        msg: |
+          Harbor Backup Completed Successfully
+          ===================================
+          Backup File: {{ backup_dir }}/{{ backup_file }}
+          Size: {{ (backup_file_info.stat.size / 1024 / 1024) | round(2) }} MB
+          Created: {{ ansible_date_time.iso8601 }}
+          
+          Backup includes:
+          - Harbor database
+          - Configuration files
+          - Registry data
+          - SSL certificates
+          
+          Harbor services are now running normally.
+
+    - name: Clean up old backups (keep last 5)
+      shell: |
+        cd {{ backup_dir }}
+        ls -t harbor-backup-*.tar.gz | tail -n +6 | xargs -r rm --
+      changed_when: false

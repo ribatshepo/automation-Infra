@@ -1,0 +1,72 @@
+---
+- name: Check if Artifactory is already installed
+  stat:
+    path: "{{ artifactory_install_dir }}/app/bin/artifactory.sh"
+  register: artifactory_binary
+
+- name: Download Artifactory
+  get_url:
+    url: "{{ artifactory_download_url }}"
+    dest: "{{ artifactory_temp_dir }}/jfrog-artifactory-oss-{{ artifactory_version }}-linux.tar.gz"
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+    mode: '0644'
+    timeout: 600
+  when: not artifactory_binary.stat.exists
+
+- name: Extract Artifactory archive
+  unarchive:
+    src: "{{ artifactory_temp_dir }}/jfrog-artifactory-oss-{{ artifactory_version }}-linux.tar.gz"
+    dest: "{{ artifactory_temp_dir }}"
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+    remote_src: yes
+    creates: "{{ artifactory_temp_dir }}/artifactory-oss-{{ artifactory_version }}"
+  when: not artifactory_binary.stat.exists
+
+- name: Move Artifactory to installation directory
+  shell: |
+    cp -r {{ artifactory_temp_dir }}/artifactory-oss-{{ artifactory_version }}/* {{ artifactory_install_dir }}/
+    chown -R {{ artifactory_user }}:{{ artifactory_group }} {{ artifactory_install_dir }}
+  args:
+    creates: "{{ artifactory_install_dir }}/app/bin/artifactory.sh"
+  when: not artifactory_binary.stat.exists
+
+- name: Remove existing var directory
+  file:
+    path: /opt/jfrog/artifactory/var
+    state: absent
+
+- name: Create Artifactory data symlink
+  file:
+    src: /var/opt/jfrog/artifactory
+    dest: /opt/jfrog/artifactory/var
+    state: link
+    owner: artifactory
+    group: artifactory
+
+- name: Set ownership of Artifactory installation
+  file:
+    path: "{{ artifactory_install_dir }}"
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+    recurse: yes
+
+- name: Make Artifactory scripts executable
+  file:
+    path: "{{ item }}"
+    mode: '0755'
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+  loop:
+    - "{{ artifactory_install_dir }}/app/bin/artifactory.sh"
+    - "{{ artifactory_install_dir }}/app/bin/artifactoryctl"
+
+- name: Clean up temporary files
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ artifactory_temp_dir }}/jfrog-artifactory-oss-{{ artifactory_version }}-linux.tar.gz"
+    - "{{ artifactory_temp_dir }}/artifactory-oss-{{ artifactory_version }}"
+  when: not artifactory_binary.stat.exists

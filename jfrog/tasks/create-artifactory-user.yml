@@ -1,0 +1,50 @@
+---
+- name: Create Artifactory group
+  group:
+    name: "{{ artifactory_group }}"
+    state: present
+
+- name: Create Artifactory user
+  user:
+    name: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+    home: "{{ artifactory_user_home }}"
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+    state: present
+
+- name: Create Artifactory directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+    mode: '0755'
+  loop:
+    - "{{ artifactory_install_dir }}"
+    - "{{ artifactory_data_dir }}"
+    - "{{ artifactory_data_dir }}/etc"
+    - "{{ artifactory_data_dir }}/data"
+    - "{{ artifactory_data_dir }}/logs"
+    - "{{ artifactory_data_dir }}/backup"
+    - "{{ artifactory_data_dir }}/run"
+    - "{{ artifactory_config_dir }}"
+    - "{{ artifactory_config_dir }}/ssl"
+    - "{{ artifactory_backup_dir }}"
+    - "{{ artifactory_temp_dir }}"
+    - "{{ artifactory_log_dir }}"
+    - "/etc/opt/jfrog"
+    - "/etc/opt/jfrog/artifactory"
+
+- name: Set ownership of Artifactory directories
+  file:
+    path: "{{ item }}"
+    owner: "{{ artifactory_user }}"
+    group: "{{ artifactory_group }}"
+    recurse: yes
+  loop:
+    - "{{ artifactory_data_dir }}"
+    - "{{ artifactory_config_dir }}"
+    - "{{ artifactory_backup_dir }}"
+    - "{{ artifactory_log_dir }}"

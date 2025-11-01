@@ -1,0 +1,314 @@
+---
+- name: Install and Configure MinIO Object Storage
+  hosts: storage
+  become: yes
+  vars_files:
+    - vars.yml
+    - vault.yml
+
+  handlers:
+    - name: restart minio
+      systemd:
+        name: minio
+        state: restarted
+        daemon_reload: yes
+
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+
+  tasks:
+    - name: Update apt package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      tags:
+        - minio
+        - packages
+
+    - name: Install required packages
+      apt:
+        name:
+          - wget
+          - curl
+          - unzip
+          - jq
+          - htop
+          - iotop
+          - ufw
+        state: present
+      tags:
+        - minio
+        - packages
+
+    - name: Create minio group
+      group:
+        name: "{{ minio_group }}"
+        system: yes
+      tags:
+        - minio
+        - user
+
+    - name: Create minio user
+      user:
+        name: "{{ minio_user }}"
+        group: "{{ minio_group }}"
+        system: yes
+        shell: /bin/false
+        home: "{{ minio_home }}"
+        create_home: no
+      tags:
+        - minio
+        - user
+        - minio
+        - user
+
+    - name: Create MinIO directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ minio_user }}"
+        group: "{{ minio_group }}"
+        mode: '0755'
+      loop:
+        - "{{ minio_home }}"
+        - "{{ minio_data_dir }}"
+        - "{{ minio_config_dir }}"
+        - "/var/log/minio"
+        - "{{ minio_backup_dir }}"
+      tags:
+        - minio
+        - directories
+
+    - name: Download MinIO server binary
+      get_url:
+        url: "https://dl.min.io/server/minio/release/linux-amd64/archive/minio.{{ minio_version }}"
+        dest: "{{ minio_home }}/minio"
+        owner: "{{ minio_user }}"
+        group: "{{ minio_group }}"
+        mode: '0755'
+        backup: yes
+      notify: restart minio
+      tags:
+        - minio
+        - binary
+
+    - name: Create MinIO symlink
+      file:
+        src: "{{ minio_home }}/minio"
+        dest: "/usr/local/bin/minio"
+        state: link
+      tags:
+        - minio
+        - binary
+
+    - name: Download MinIO client (mc)
+      get_url:
+        url: "https://dl.min.io/client/mc/release/linux-amd64/mc"
+        dest: "{{ minio_home }}/mc"
+        owner: "{{ minio_user }}"
+        group: "{{ minio_group }}"
+        mode: '0755'
+      when: minio_client_enabled
+      tags:
+        - minio
+        - client
+
+    - name: Create MinIO client symlink
+      file:
+        src: "{{ minio_home }}/mc"
+        dest: "/usr/local/bin/mc"
+        state: link
+      when: minio_client_enabled
+      tags:
+        - minio
+        - client
+
+    - name: Configure MinIO environment file
+      template:
+        src: minio.env.j2
+        dest: "{{ minio_config_dir }}/minio.env"
+        owner: "{{ minio_user }}"
+        group: "{{ minio_group }}"
+        mode: '0600'
+        backup: yes
+      notify: restart minio
+      tags:
+        - minio
+        - config
+
+    - name: Create MinIO systemd service file
+      template:
+        src: minio.service.j2
+        dest: /etc/systemd/system/minio.service
+        mode: '0644'
+        backup: yes
+      notify:
+        - reload systemd
+        - restart minio
+      tags:
+        - minio
+        - service
+
+    - name: Configure MinIO logrotate
+      template:
+        src: minio.logrotate.j2
+        dest: /etc/logrotate.d/minio
+        mode: '0644'
+      tags:
+        - minio
+        - logging
+
+    - name: Set system limits for MinIO
+      copy:
+        content: |
+          {{ minio_user }} soft nofile {{ minio_max_open_files }}
+          {{ minio_user }} hard nofile {{ minio_max_open_files }}
+          {{ minio_user }} soft nproc {{ minio_max_processes }}
+          {{ minio_user }} hard nproc {{ minio_max_processes }}
+        dest: /etc/security/limits.d/minio.conf
+        mode: '0644'
+      tags:
+        - minio
+        - limits
+
+    - name: Configure kernel parameters for MinIO
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_set: true
+        reload: true
+      loop:
+        - { name: 'vm.swappiness', value: '1' }
+        - { name: 'net.core.rmem_default', value: '262144' }
+        - { name: 'net.core.rmem_max', value: '16777216' }
+        - { name: 'net.core.wmem_default', value: '262144' }
+        - { name: 'net.core.wmem_max', value: '16777216' }
+        - { name: 'net.ipv4.tcp_rmem', value: '4096 65536 16777216' }
+        - { name: 'net.ipv4.tcp_wmem', value: '4096 65536 16777216' }
+        - { name: 'net.core.netdev_max_backlog', value: '30000' }
+        - { name: 'net.ipv4.tcp_max_syn_backlog', value: '30000' }
+      tags:
+        - minio
+        - kernel
+
+    - name: Configure firewall for MinIO
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        src: "{{ item.src }}"
+      loop:
+        - { port: "{{ minio_port }}", src: "10.100.10.0/24" }
+        - { port: "{{ minio_port }}", src: "127.0.0.1" }
+        - { port: "{{ minio_console_port }}", src: "10.100.10.0/24" }
+        - { port: "{{ minio_console_port }}", src: "127.0.0.1" }
+      when: minio_firewall_enabled
+      tags:
+        - minio
+        - firewall
+
+    - name: Start and enable MinIO service
+      systemd:
+        name: minio
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      tags:
+        - minio
+        - service
+
+    - name: Wait for MinIO to be ready
+      wait_for:
+        port: "{{ minio_port }}"
+        host: "{{ minio_bind_address }}"
+        delay: 10
+        timeout: 60
+      tags:
+        - minio
+        - health
+
+    - name: Configure MinIO client alias
+      shell: |
+        mc alias set local {{ minio_scheme }}://{{ minio_bind_address }}:{{ minio_port }} {{ minio_root_user }} {{ minio_root_password }}
+      environment:
+        MC_HOST_local: "{{ minio_scheme }}://{{ minio_root_user }}:{{ minio_root_password }}@{{ minio_bind_address }}:{{ minio_port }}"
+      become_user: "{{ minio_user }}"
+      when: minio_client_enabled
+      no_log: true
+      tags:
+        - minio
+        - client
+        - config
+
+    - name: Create default buckets
+      shell: |
+        mc mb local/{{ item.name }} --ignore-existing
+        mc policy set {{ item.policy }} local/{{ item.name }}
+      environment:
+        MC_HOST_local: "{{ minio_scheme }}://{{ minio_root_user }}:{{ minio_root_password }}@{{ minio_bind_address }}:{{ minio_port }}"
+      become_user: "{{ minio_user }}"
+      loop: "{{ minio_default_buckets }}"
+      when: minio_client_enabled
+      no_log: true
+      tags:
+        - minio
+        - buckets
+
+    - name: Create MinIO backup script
+      template:
+        src: minio-backup.sh.j2
+        dest: /usr/local/bin/minio-backup.sh
+        mode: '0755'
+        owner: root
+        group: root
+      when: minio_backup_enabled
+      tags:
+        - minio
+        - backup
+
+    - name: Schedule MinIO backup cron job
+      cron:
+        name: "MinIO Backup"
+        minute: "{{ minio_backup_schedule.split()[0] }}"
+        hour: "{{ minio_backup_schedule.split()[1] }}"
+        day: "{{ minio_backup_schedule.split()[2] }}"
+        month: "{{ minio_backup_schedule.split()[3] }}"
+        weekday: "{{ minio_backup_schedule.split()[4] }}"
+        job: "/usr/local/bin/minio-backup.sh"
+        user: root
+      when: minio_backup_enabled
+      tags:
+        - minio
+        - backup
+        - cron
+
+    - name: Create MinIO health check script
+      template:
+        src: minio-health-check.sh.j2
+        dest: /usr/local/bin/minio-health-check.sh
+        mode: '0755'
+        owner: root
+        group: root
+      when: minio_health_check_enabled
+      tags:
+        - minio
+        - health
+
+    - name: Display MinIO status information
+      debug:
+        msg: |
+          MinIO Installation Complete:
+          ============================
+          - Version: {{ minio_version }}
+          - Server URL: {{ minio_scheme }}://{{ ansible_default_ipv4.address }}:{{ minio_port }}
+          - Console URL: {{ minio_scheme }}://{{ ansible_default_ipv4.address }}:{{ minio_console_port }}
+          - Root User: {{ minio_root_user }}
+          - Data Directory: {{ minio_data_dir }}
+          - Config Directory: {{ minio_config_dir }}
+          - Service Status: Running
+          - Default Buckets: {{ minio_default_buckets | length }} created
+          - Backup: {{ 'Enabled' if minio_backup_enabled else 'Disabled' }}
+      tags:
+        - minio
+        - info

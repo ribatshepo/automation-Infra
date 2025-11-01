@@ -1,0 +1,21 @@
+[Unit]
+Description=Harbor Container Registry
+Requires=docker.service
+After=docker.service
+Documentation=https://goharbor.io/
+
+[Service]
+Type=forking
+RemainAfterExit=yes
+ExecStart={{ harbor_install_dir }}/harbor-start.sh
+ExecStop={{ harbor_install_dir }}/harbor-stop.sh
+ExecReload=/bin/kill -s HUP $MAINPID
+TimeoutSec=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=harbor
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

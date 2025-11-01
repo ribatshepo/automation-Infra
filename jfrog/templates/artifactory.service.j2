@@ -1,0 +1,31 @@
+[Unit]
+Description=JFrog Artifactory
+Documentation=https://www.jfrog.com/confluence/display/JFROG/Installing+Artifactory
+After=network.target postgresql.service
+Wants=postgresql.service
+RequiresMountsFor={{ artifactory_data_dir }}
+
+[Service]
+Type=forking
+LimitNOFILE={{ artifactory_max_open_files }}
+User={{ artifactory_user }}
+Group={{ artifactory_group }}
+Environment=JAVA_HOME={{ java_home }}
+Environment=ARTIFACTORY_HOME={{ artifactory_install_dir }}
+Environment=ARTIFACTORY_DATA={{ artifactory_data_dir }}
+EnvironmentFile=/etc/opt/jfrog/artifactory/default
+WorkingDirectory={{ artifactory_install_dir }}
+ExecStart={{ artifactory_install_dir }}/app/bin/artifactory.sh start
+ExecStop={{ artifactory_install_dir }}/app/bin/artifactory.sh stop
+ExecReload={{ artifactory_install_dir }}/app/bin/artifactory.sh restart
+PIDFile={{ artifactory_data_dir }}/run/artifactory.pid
+TimeoutStartSec=600
+TimeoutStopSec=300
+KillMode=mixed
+Restart=on-failure
+RestartSec=30
+StartLimitInterval=600
+StartLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target

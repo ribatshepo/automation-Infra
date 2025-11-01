@@ -1,0 +1,129 @@
+---
+- name: Verify Redis Stack Installation and Configuration
+  hosts: redis
+  become: yes
+
+  tasks:
+    - name: Check Redis service status
+      service:
+        name: redis-server
+      register: redis_service_status
+
+    - name: Display Redis service status
+      debug:
+        msg: "Redis service is {{ redis_service_status.status.ActiveState }}"
+
+    - name: Test Redis basic connectivity
+      command: redis-cli ping
+      register: redis_ping
+      changed_when: false
+
+    - name: Display Redis ping result
+      debug:
+        msg: "Redis ping response: {{ redis_ping.stdout }}"
+
+    - name: Check Redis Stack directories exist
+      stat:
+        path: "{{ item }}"
+      register: redis_stack_dirs
+      loop:
+        - /etc/redis-stack
+        - /var/lib/redis-stack
+        - /var/log/redis-stack
+        - /run/redis-stack
+
+    - name: Display Redis Stack directory status
+      debug:
+        msg: "{{ item.item }} exists: {{ item.stat.exists }}"
+      loop: "{{ redis_stack_dirs.results }}"
+
+    - name: Check Redis Stack symlinks
+      stat:
+        path: "{{ item }}"
+      register: redis_stack_symlinks
+      loop:
+        - /var/lib/redis-stack
+        - /var/log/redis-stack
+        - /etc/redis-stack/redis-stack.conf
+
+    - name: Display Redis Stack symlink status
+      debug:
+        msg: "{{ item.item }} is symlink: {{ item.stat.islnk | default(false) }}"
+      loop: "{{ redis_stack_symlinks.results }}"
+
+    - name: Check Redis Stack service alias
+      systemd:
+        name: redis-stack
+      register: redis_stack_service_status
+
+    - name: Display Redis Stack service alias status
+      debug:
+        msg: "Redis Stack service alias is {{ redis_stack_service_status.status.ActiveState | default('inactive') }}"
+
+    - name: Test Redis functionality (basic commands)
+      command: redis-cli {{ item }}
+      register: redis_commands
+      changed_when: false
+      loop:
+        - "set test_key 'Hello Redis Stack'"
+        - "get test_key"
+        - "del test_key"
+        - "info server"
+
+    - name: Display Redis command results
+      debug:
+        msg: "{{ item.item }}: {{ item.stdout }}"
+      loop: "{{ redis_commands.results }}"
+
+    - name: Check Redis configuration
+      command: redis-cli config get save
+      register: redis_config_save
+      changed_when: false
+
+    - name: Display Redis save configuration
+      debug:
+        msg: "Redis save config: {{ redis_config_save.stdout_lines }}"
+
+    - name: Check Redis memory usage
+      command: redis-cli info memory
+      register: redis_memory_info
+      changed_when: false
+
+    - name: Display Redis memory usage
+      debug:
+        msg: "{{ redis_memory_info.stdout_lines | select('match', '^used_memory_human:.*') | list }}"
+
+    - name: Check if Redis Stack backup script exists
+      stat:
+        path: /usr/local/bin/redis-stack-backup.sh
+      register: backup_script_stat
+
+    - name: Display backup script status
+      debug:
+        msg: "Redis Stack backup script exists: {{ backup_script_stat.stat.exists }}"
+
+    - name: Check Redis Stack backup cron job
+      command: crontab -l
+      register: cron_jobs
+      changed_when: false
+      become_user: root
+      failed_when: false
+
+    - name: Display backup cron job status
+      debug:
+        msg: "Redis Stack backup cron job configured: {{ 'redis-stack-backup' in cron_jobs.stdout | default('') }}"
+
+    - name: Verify Redis Stack compatibility summary
+      debug:
+        msg: |
+          Redis Stack Compatibility Summary:
+          ================================
+          ✓ Redis Service: {{ 'Active' if redis_service_status.status.ActiveState == 'active' else 'Inactive' }}
+          ✓ Basic Connectivity: {{ 'OK' if redis_ping.stdout == 'PONG' else 'Failed' }}
+          ✓ Stack Directories: {{ 'Created' if redis_stack_dirs.results | selectattr('stat.exists', 'equalto', true) | list | length == 4 else 'Missing' }}
+          ✓ Stack Symlinks: {{ 'Configured' if redis_stack_symlinks.results | selectattr('stat.islnk', 'defined') | selectattr('stat.islnk', 'equalto', true) | list | length >= 2 else 'Missing' }}
+          ✓ Service Alias: {{ 'Active' if redis_stack_service_status.status.ActiveState | default('inactive') == 'active' else 'Inactive' }}
+          ✓ Backup System: {{ 'Configured' if backup_script_stat.stat.exists else 'Missing' }}
+          
+          Note: This Redis Stack implementation provides compatibility
+          with Redis Stack functionality using the standard Redis installation.

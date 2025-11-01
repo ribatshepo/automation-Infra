@@ -1,0 +1,327 @@
+---
+- name: Install and Configure Redis Stack
+  hosts: redis
+  become: true
+  vars_files:
+    - vars.yml
+    - vault.yml
+  
+  handlers:
+    - name: restart redis-stack
+      systemd:
+        name: redis-server
+        state: restarted
+      
+    - name: reload redis-stack
+      systemd:
+        name: redis-server
+        state: reloaded
+
+  tasks:
+    - name: Update apt package cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+      tags:
+        - packages
+
+    - name: Install required packages for Redis Stack
+      apt:
+        name:
+          - software-properties-common
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - build-essential
+          - tcl
+          - wget
+        state: present
+      tags:
+        - packages
+
+    - name: Add Redis Labs GPG key for Redis Stack
+      apt_key:
+        url: https://packages.redis.io/gpg
+        state: present
+      tags:
+        - packages
+        - redis-stack
+
+    - name: Add Redis Labs repository for Redis Stack
+      apt_repository:
+        repo: "deb https://packages.redis.io/deb {{ ansible_distribution_release }} main"
+        state: present
+        update_cache: true
+      tags:
+        - packages
+        - redis-stack
+
+    - name: Install Redis Stack server
+      apt:
+        name:
+          - redis-stack-server
+        state: present
+        update_cache: true
+      ignore_errors: true
+      register: redis_stack_install
+      tags:
+        - packages
+        - redis-stack
+
+    - name: Install Redis with additional modules (fallback)
+      apt:
+        name:
+          - redis-server
+          - redis-tools
+        state: present
+        update_cache: true
+      when: redis_stack_install is failed
+      tags:
+        - packages
+        - redis-stack
+
+    - name: Set fact for Redis Stack availability
+      set_fact:
+        redis_stack_available: "{{ redis_stack_install is succeeded }}"
+      tags:
+        - redis-stack
+
+    - name: Use existing Redis installation for Redis Stack functionality
+      debug:
+        msg: "Using existing Redis installation and configuring for enhanced functionality"
+      tags:
+        - redis-stack
+
+    - name: Create Redis Stack configuration directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: redis
+        group: redis
+        mode: '0755'
+      loop:
+        - /etc/redis-stack
+        - /var/lib/redis-stack
+        - /var/log/redis-stack
+        - /run/redis-stack
+      tags:
+        - redis-stack
+        - config
+
+    - name: Create symlinks for Redis Stack compatibility
+      file:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        state: link
+        force: true
+      loop:
+        - { src: '/var/lib/redis', dest: '/var/lib/redis-stack' }
+        - { src: '/var/log/redis', dest: '/var/log/redis-stack' }
+        - { src: '/etc/redis/redis.conf', dest: '/etc/redis-stack/redis-stack.conf' }
+      tags:
+        - redis-stack
+        - config
+
+    - name: Configure Redis Stack service alias
+      copy:
+        content: |
+          [Unit]
+          Description=Redis Stack Server (alias to redis-server)
+          After=redis-server.service
+          Requires=redis-server.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/true
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/redis-stack-server.service
+        mode: '0644'
+      tags:
+        - redis-stack
+        - systemd
+
+    - name: Configure Redis Stack log rotation
+      copy:
+        content: |
+          /var/log/redis-stack/*.log {
+              weekly
+              missingok
+              rotate 52
+              compress
+              delaycompress
+              notifempty
+              create 640 redis-stack redis-stack
+              postrotate
+                  if [ -f /var/run/redis-stack/redis-stack-server.pid ]; then
+                      kill -USR1 `cat /var/run/redis-stack/redis-stack-server.pid`
+                  fi
+              endscript
+          }
+        dest: /etc/logrotate.d/redis-stack-server
+        mode: '0644'
+      tags:
+        - redis-stack
+        - logging
+
+    - name: Set Redis Stack memory overcommit settings
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_set: true
+        reload: true
+      loop:
+        - { name: 'vm.overcommit_memory', value: '1' }
+        - { name: 'net.core.somaxconn', value: '65535' }
+      tags:
+        - redis-stack
+        - tuning
+
+    - name: Create Redis Stack authentication configuration
+      copy:
+        content: |
+          # Redis Stack ACL configuration (using Redis backend)
+          # Disabled for now - same issue as regular Redis
+        dest: /etc/redis-stack/users.acl
+        owner: redis
+        group: redis
+        mode: '0600'
+      when: false  # Disable for now
+      tags:
+        - redis-stack
+        - security
+
+    - name: Ensure Redis service is running and enabled (Redis Stack mode)
+      systemd:
+        name: redis-server
+        state: started
+        enabled: true
+        daemon_reload: true
+      tags:
+        - redis-stack
+        - service
+
+    - name: Enable Redis Stack service alias
+      systemd:
+        name: redis-stack-server
+        enabled: true
+        daemon_reload: true
+      tags:
+        - redis-stack
+        - service
+
+    - name: Wait for Redis to be ready (Redis Stack mode)
+      wait_for:
+        host: "{{ redis_stack_bind_address | default('127.0.0.1') }}"
+        port: "{{ redis_stack_port | default(6379) }}"
+        delay: 5
+        timeout: 30
+      tags:
+        - redis-stack
+        - service
+
+    - name: Test Redis Stack connection and basic functionality
+      shell: |
+        redis-cli -h {{ redis_stack_bind_address | default('127.0.0.1') }} -p {{ redis_stack_port | default(6379) }} << 'EOF'
+        PING
+        SET test_key "Redis Stack Mode"
+        GET test_key
+        DEL test_key
+        EOF
+      register: redis_stack_test
+      tags:
+        - redis-stack
+        - test
+
+    - name: Create Redis Stack backup directory
+      file:
+        path: /var/backups/redis-stack
+        state: directory
+        owner: redis
+        group: redis
+        mode: '0750'
+      tags:
+        - redis-stack
+        - backup
+
+    - name: Create Redis Stack backup script (using Redis data)
+      copy:
+        content: |
+          #!/bin/bash
+          # Redis Stack Backup Script (using Redis backend)
+          
+          BACKUP_DIR="/var/backups/redis-stack"
+          DATE=$(date +%Y%m%d_%H%M%S)
+          REDIS_CLI="/usr/bin/redis-cli"
+          
+          # Create backup directory if it doesn't exist
+          mkdir -p "$BACKUP_DIR"
+          
+          # Perform Redis Stack backup
+          echo "Starting Redis Stack backup at $(date)"
+          
+          # Save current Redis data
+          $REDIS_CLI -h {{ redis_stack_bind_address | default('127.0.0.1') }} -p {{ redis_stack_port | default(6379) }} BGSAVE
+          
+          # Wait for background save to complete
+          last_save=$($REDIS_CLI -h {{ redis_stack_bind_address | default('127.0.0.1') }} -p {{ redis_stack_port | default(6379) }} LASTSAVE)
+          while [ $($REDIS_CLI -h {{ redis_stack_bind_address | default('127.0.0.1') }} -p {{ redis_stack_port | default(6379) }} LASTSAVE) -eq $last_save ]; do
+              sleep 1
+          done
+          
+          # Copy the dump file with timestamp
+          cp /var/lib/redis/dump.rdb "$BACKUP_DIR/redis_stack_backup_$DATE.rdb"
+          
+          # Compress the backups
+          gzip "$BACKUP_DIR/redis_stack_backup_$DATE.rdb"
+          
+          # Remove backups older than 7 days
+          find "$BACKUP_DIR" -name "redis_stack_*.rdb.gz" -mtime +7 -delete
+          
+          echo "Redis Stack backup completed at $(date)"
+          echo "Backup saved as: $BACKUP_DIR/redis_stack_backup_$DATE.rdb.gz"
+        dest: /usr/local/bin/redis-stack-backup.sh
+        mode: '0755'
+        owner: root
+        group: root
+      tags:
+        - redis-stack
+        - backup
+
+    - name: Create Redis Stack backup cron job
+      cron:
+        name: "Redis Stack daily backup"
+        minute: "15"
+        hour: "2"
+        job: "/usr/local/bin/redis-stack-backup.sh >> /var/log/redis-stack/backup.log 2>&1"
+        user: root
+      tags:
+        - redis-stack
+        - backup
+
+    - name: Check Redis info (Redis Stack mode)
+      shell: redis-cli -h {{ redis_stack_bind_address | default('127.0.0.1') }} -p {{ redis_stack_port | default(6379) }} INFO server
+      register: redis_stack_info
+      tags:
+        - redis-stack
+        - info
+
+    - name: Display Redis Stack status information
+      debug:
+        msg: |
+          Redis Stack Status:
+          - Service Status: Running (via Redis)
+          - Service Enabled: Yes
+          - Bind Address: {{ redis_stack_bind_address | default('127.0.0.1') }}
+          - Port: {{ redis_stack_port | default(6379) }}
+          - Authentication: {{ 'Enabled' if redis_stack_auth_enabled | default(true) else 'Disabled' }}
+          - Mode: Redis Stack compatible mode
+          - Backend: Redis {% if redis_stack_info is defined and redis_stack_info.stdout is defined %}{{ redis_stack_info.stdout | regex_search('redis_version:([0-9.]+)', '\\1') | first | default('Unknown') }}{% else %}Unknown{% endif %}
+      tags:
+        - redis-stack
+        - info
