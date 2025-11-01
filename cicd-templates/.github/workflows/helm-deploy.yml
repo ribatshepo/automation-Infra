@@ -290,10 +290,10 @@ jobs:
           
           if [[ "${{ inputs.dry-run }}" == "false" ]]; then
             echo "### Deployment Status:" >> $GITHUB_STEP_SUMMARY
-            echo "✅ Successfully deployed to Kubernetes" >> $GITHUB_STEP_SUMMARY
+            echo " Successfully deployed to Kubernetes" >> $GITHUB_STEP_SUMMARY
           else
             echo "### Dry Run Results:" >> $GITHUB_STEP_SUMMARY
-            echo "✅ Dry run completed successfully" >> $GITHUB_STEP_SUMMARY
+            echo " Dry run completed successfully" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: 'Cleanup'

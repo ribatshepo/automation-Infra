@@ -45,12 +45,12 @@ cicd-templates/
 
 | Technology | Package Registry | Container Registry | Kubernetes | Security Scanning | Build Features |
 |------------|------------------|-------------------|------------|-------------------|----------------|
-| **.NET** | Artifactory (NuGet) | Harbor | ✅ | JFrog Xray + built-in | Multi-framework, tests, coverage |
-| **Python** | Artifactory (PyPI) | Harbor | ✅ | JFrog Xray + bandit/safety | Multiple package managers, linting |
-| **Go** | Artifactory (Go modules) | Harbor | ✅ | JFrog Xray + built-in | Cross-compilation, benchmarks |
-| **Rust** | Artifactory (Cargo) | Harbor | ✅ | JFrog Xray + cargo-audit | Cross-compilation, clippy |
-| **Node.js** | Artifactory (npm) | Harbor | ✅ | JFrog Xray + npm audit | Multiple package managers, E2E tests |
-| **Docker** | - | Harbor | ✅ | Trivy + JFrog Xray | Multi-platform, manifest generation |
+| **.NET** | Artifactory (NuGet) | Harbor |  | JFrog Xray + built-in | Multi-framework, tests, coverage |
+| **Python** | Artifactory (PyPI) | Harbor |  | JFrog Xray + bandit/safety | Multiple package managers, linting |
+| **Go** | Artifactory (Go modules) | Harbor |  | JFrog Xray + built-in | Cross-compilation, benchmarks |
+| **Rust** | Artifactory (Cargo) | Harbor |  | JFrog Xray + cargo-audit | Cross-compilation, clippy |
+| **Node.js** | Artifactory (npm) | Harbor |  | JFrog Xray + npm audit | Multiple package managers, E2E tests |
+| **Docker** | - | Harbor |  | Trivy + JFrog Xray | Multi-platform, manifest generation |
 
 ##  **Key Features**
 

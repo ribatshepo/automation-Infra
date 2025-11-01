@@ -47,14 +47,14 @@ cicd-templates/
 
 | Technology | Package Registry | Container Registry | Kubernetes | Workflow |
 |------------|------------------|-------------------|------------|----------|
-| .NET | JFrog Artifactory (NuGet) | Harbor | ✅ | `dotnet.yml` |
-| Python | JFrog Artifactory (PyPI) | Harbor | ✅ | `python.yml` |
-| Go | JFrog Artifactory (Go) | Harbor | ✅ | `golang.yml` |
-| Rust | JFrog Artifactory (Cargo) | Harbor | ✅ | `rust.yml` |
-| Node.js | JFrog Artifactory (npm) | Harbor | ✅ | `nodejs.yml` |
-| Docker | - | Harbor | ✅ | `docker.yml` |
-| Kubernetes | - | - | ✅ | `kubernetes-deploy.yml` |
-| Helm | - | - | ✅ | `helm-deploy.yml` |
+| .NET | JFrog Artifactory (NuGet) | Harbor |  | `dotnet.yml` |
+| Python | JFrog Artifactory (PyPI) | Harbor |  | `python.yml` |
+| Go | JFrog Artifactory (Go) | Harbor |  | `golang.yml` |
+| Rust | JFrog Artifactory (Cargo) | Harbor |  | `rust.yml` |
+| Node.js | JFrog Artifactory (npm) | Harbor |  | `nodejs.yml` |
+| Docker | - | Harbor |  | `docker.yml` |
+| Kubernetes | - | - |  | `kubernetes-deploy.yml` |
+| Helm | - | - |  | `helm-deploy.yml` |
 
 ## Quick Start
 
