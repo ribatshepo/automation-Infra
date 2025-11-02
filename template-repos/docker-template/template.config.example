@@ -1,0 +1,65 @@
+# Template Configuration
+# This file defines all configurable values for the Docker template
+# Copy this file to template.config and customize for your project
+
+# Base Image Configuration
+BASE_IMAGE=node
+BASE_IMAGE_TAG=18.17.0-alpine3.18
+
+# Application Configuration
+APP_NAME=my-app
+APP_USER=appuser
+APP_GROUP=appgroup
+APP_PORT=3000
+
+# Package Management
+PACKAGE_FILES=package*.json
+DEPENDENCIES_PATH=node_modules
+INSTALL_DEPENDENCIES_COMMAND=npm ci --only=production
+INSTALL_ALL_DEPENDENCIES=npm install
+CLEAN_CACHE_COMMAND=npm cache clean --force
+
+# Build Configuration
+BUILD_COMMAND=npm run build
+BUILD_OUTPUT_PATH=dist
+STATIC_FILES_PATH=public
+SOURCE_PATH=src
+
+# Runtime Configuration
+START_COMMAND=["npm", "start"]
+DEV_START_COMMAND=["npm", "run", "dev"]
+ENV_VAR_NAME=NODE_ENV
+DEV_ENV_VALUE=development
+
+# System Commands
+UPDATE_PACKAGES_COMMAND=apk update && apk upgrade
+INSTALL_RUNTIME_DEPS=apk add --no-cache curl
+INSTALL_DEV_TOOLS=apk add --no-cache curl git bash
+INSTALL_GLOBAL_TOOLS=npm install -g nodemon
+CLEANUP_COMMAND=rm -rf /var/cache/apk/*
+
+# Health Check
+HEALTH_CHECK_COMMAND=curl -f http://localhost:${PORT:-3000}/health || exit 1
+
+# Harbor Configuration
+HARBOR_URL=harbor.local
+HARBOR_PROJECT=library
+
+# Database Configuration
+DB_TYPE=postgres
+DB_IMAGE=postgres:15.4-alpine
+DB_INIT_SCRIPT=init.sql
+DB_DEV_INIT_SCRIPT=init-dev.sql
+
+# Cache Configuration  
+CACHE_TYPE=redis
+CACHE_IMAGE=redis:7.2.1-alpine
+
+# Monitoring Configuration
+ENABLE_MONITORING=true
+PROMETHEUS_IMAGE=prom/prometheus:v2.47.0
+GRAFANA_IMAGE=grafana/grafana:10.1.2
+
+# Load Balancer Configuration
+LOADBALANCER_TYPE=nginx
+LOADBALANCER_IMAGE=nginx:1.25.2-alpine

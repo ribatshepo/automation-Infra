@@ -1,0 +1,40 @@
+# Development Dockerfile template
+
+FROM {{BASE_IMAGE}}:{{BASE_IMAGE_TAG}}
+
+# Install development tools
+RUN {{UPDATE_PACKAGES_COMMAND}} && \
+    {{INSTALL_DEV_TOOLS}} \
+    && {{CLEANUP_COMMAND}}
+
+# Create app user and group
+RUN addgroup -g 1001 -S {{APP_GROUP}} && \
+    adduser -S {{APP_USER}} -u 1001 -G {{APP_GROUP}}
+
+# Set working directory
+WORKDIR /app
+
+# Install global development tools
+RUN {{INSTALL_GLOBAL_TOOLS}}
+
+# Copy package files
+COPY {{PACKAGE_FILES}} ./
+
+# Install all dependencies (including dev)
+RUN {{INSTALL_ALL_DEPENDENCIES}} && \
+    {{CLEAN_CACHE_COMMAND}}
+
+# Change ownership of dependencies
+RUN chown -R {{APP_USER}}:{{APP_GROUP}} /app
+
+# Switch to non-root user
+USER {{APP_USER}}
+
+# Expose port
+EXPOSE {{APP_PORT}}
+
+# Set development environment
+ENV {{ENV_VAR_NAME}}={{DEV_ENV_VALUE}}
+
+# Start application with hot reload
+CMD {{DEV_START_COMMAND}}

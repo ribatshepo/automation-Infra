@@ -1,0 +1,71 @@
+# Multi-stage production Dockerfile template
+
+# Build stage
+FROM {{BASE_IMAGE}}:{{BASE_IMAGE_TAG}} AS builder
+
+# Set working directory
+WORKDIR /app
+
+# Create app user and group
+RUN addgroup -g 1001 -S {{APP_GROUP}} && \
+    adduser -S {{APP_USER}} -u 1001 -G {{APP_GROUP}}
+
+# Copy package files
+COPY {{PACKAGE_FILES}} ./
+
+# Install dependencies
+RUN {{INSTALL_DEPENDENCIES_COMMAND}} && \
+    {{CLEAN_CACHE_COMMAND}}
+
+# Copy application code
+COPY --chown={{APP_USER}}:{{APP_GROUP}} . .
+
+# Build application (if needed)
+RUN {{BUILD_COMMAND}} || echo "No build script found"
+
+# Production stage
+FROM {{BASE_IMAGE}}:{{BASE_IMAGE_TAG}} AS production
+
+# Install security updates and minimal tools
+RUN {{UPDATE_PACKAGES_COMMAND}} && \
+    {{INSTALL_RUNTIME_DEPS}} && \
+    {{CLEANUP_COMMAND}}
+
+# Create app user and group
+RUN addgroup -g 1001 -S {{APP_GROUP}} && \
+    adduser -S {{APP_USER}} -u 1001 -G {{APP_GROUP}}
+
+# Set working directory
+WORKDIR /app
+
+# Copy dependencies from builder
+COPY --from=builder --chown={{APP_USER}}:{{APP_GROUP}} /app/{{DEPENDENCIES_PATH}} ./{{DEPENDENCIES_PATH}}
+
+# Copy built application
+COPY --from=builder --chown={{APP_USER}}:{{APP_GROUP}} /app/{{BUILD_OUTPUT_PATH}}/ ./{{BUILD_OUTPUT_PATH}}/
+COPY --from=builder --chown={{APP_USER}}:{{APP_GROUP}} /app/{{STATIC_FILES_PATH}}/ ./{{STATIC_FILES_PATH}}/
+COPY --from=builder --chown={{APP_USER}}:{{APP_GROUP}} /app/{{SOURCE_PATH}}/ ./{{SOURCE_PATH}}/
+
+# Copy package files for runtime
+COPY --chown={{APP_USER}}:{{APP_GROUP}} {{PACKAGE_FILES}} ./
+
+# Create health check endpoint
+RUN echo '#!/bin/sh\n{{HEALTH_CHECK_COMMAND}}' > /usr/local/bin/healthcheck.sh && \
+    chmod +x /usr/local/bin/healthcheck.sh
+
+# Switch to non-root user
+USER {{APP_USER}}
+
+# Expose port
+EXPOSE {{APP_PORT}}
+
+# Add health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD /usr/local/bin/healthcheck.sh
+
+# Set environment
+ENV NODE_ENV=production
+ENV PORT={{APP_PORT}}
+
+# Start application
+CMD {{START_COMMAND}}

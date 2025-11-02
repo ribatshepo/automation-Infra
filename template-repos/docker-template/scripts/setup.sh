@@ -13,10 +13,8 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-PROJECT_NAME=${1:-"my-docker-project"}
-DOCKER_REGISTRY=${DOCKER_REGISTRY:-""}
-ENABLE_MONITORING=${ENABLE_MONITORING:-"true"}
-ENABLE_SECURITY=${ENABLE_SECURITY:-"true"}
+PROJECT_NAME=${1:-"my-app"}
+TEMPLATE_CONFIG=${2:-"template.config"}
 
 # Function to print colored output
 print_status() {
