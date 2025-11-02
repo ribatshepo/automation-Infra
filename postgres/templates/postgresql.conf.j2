@@ -110,8 +110,6 @@ track_activities = on
 track_counts = on
 track_io_timing = on
 track_functions = none
-# stats_temp_directory deprecated in PostgreSQL 15
-# stats_temp_directory = '/var/run/postgresql/{{ postgresql_version }}-main.pg_stat_tmp'
 
 #------------------------------------------------------------------------------
 # AUTOVACUUM PARAMETERS
@@ -170,15 +168,9 @@ max_pred_locks_per_page = 2
 
 array_nulls = on
 backslash_quote = safe_encoding
-# default_with_oids deprecated in PostgreSQL 12 and removed in PostgreSQL 15
-# default_with_oids = off
 escape_string_warning = on
 lo_compat_privileges = off
-# operator_precedence_warning deprecated in PostgreSQL 15
-# operator_precedence_warning = off
 quote_all_identifiers = off
-# sql_inheritance deprecated in PostgreSQL 15
-# sql_inheritance = on
 standard_conforming_strings = on
 synchronize_seqscans = on
 

@@ -114,7 +114,7 @@
       systemd:
         name: redis-server
         state: stopped
-      ignore_errors: true
+      failed_when: false
       tags:
         - redis
         - service

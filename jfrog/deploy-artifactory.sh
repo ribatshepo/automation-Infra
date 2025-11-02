@@ -3,7 +3,7 @@
 # JFrog Artifactory Deployment Script
 # Usage: ./deploy-artifactory.sh [install|verify|backup|manage]
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLAYBOOK_DIR="$SCRIPT_DIR"

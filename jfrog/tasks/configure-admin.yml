@@ -9,7 +9,7 @@
     force_basic_auth: yes
     status_code: [200, 401, 403]
   register: admin_status_default
-  ignore_errors: yes
+  failed_when: false
 
 - name: Check if custom password already works
   uri:
@@ -20,7 +20,7 @@
     force_basic_auth: yes
     status_code: [200, 401, 403]
   register: admin_status_custom
-  ignore_errors: yes
+  failed_when: false
 
 - name: Update admin password if default credentials work
   uri:
@@ -43,7 +43,7 @@
   when: 
     - admin_status_default.status == 200
     - admin_status_custom.status != 200
-  ignore_errors: yes
+  failed_when: false
 
 - name: Verify new password works
   uri:

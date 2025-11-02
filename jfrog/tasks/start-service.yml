@@ -4,7 +4,7 @@
   systemd:
     name: artifactory
     state: stopped
-  ignore_errors: yes
+  failed_when: false
 
 - name: Ensure PostgreSQL is running first
   systemd:
@@ -35,7 +35,7 @@
   until: service_status.status.ActiveState == "active"
   retries: 20
   delay: 15
-  ignore_errors: yes
+  failed_when: false
 
 - name: Check if service failed to start
   systemd:

@@ -26,14 +26,14 @@
       debug:
         var: qemu_service_status
       
-    - name: Verify qemu-guest-agent service is running (primary check)
+    - name: Verify qemu-guest-agent service status
       assert:
         that:
           - ansible_facts.services['qemu-guest-agent.service'].state == 'running'
           - ansible_facts.services['qemu-guest-agent.service'].status == 'enabled'
         fail_msg: "qemu-guest-agent service is not running or not enabled"
         success_msg: "qemu-guest-agent service is running and enabled"
-      ignore_errors: yes
+      failed_when: false
       register: primary_service_check
       
     - name: Alternative service verification using systemctl

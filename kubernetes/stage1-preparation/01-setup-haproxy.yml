@@ -115,7 +115,7 @@
         method: GET
         status_code: 200
       register: haproxy_stats_test
-      ignore_errors: yes
+      failed_when: false
       tags:
         - haproxy
         - test

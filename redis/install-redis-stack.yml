@@ -64,7 +64,7 @@
           - redis-stack-server
         state: present
         update_cache: true
-      ignore_errors: true
+      failed_when: false
       register: redis_stack_install
       tags:
         - packages

@@ -4,12 +4,17 @@ A comprehensive Docker template with multi-stage builds, Docker Compose configur
 
 ## Features
 
+- **Template-Based Configuration**: No hardcoded values, fully configurable via `template.config`
+- **Multi-Language Support**: Templates for Node.js, Python, Go, Java, .NET, Rust, and more
 - **Multi-stage Builds**: Optimized Docker images with build and runtime stages
+- **Harbor Integration**: Built-in support for Harbor registry with vulnerability scanning
 - **Security**: Rootless containers, security scanning, and best practices
-- **Orchestration**: Docker Compose for local development and testing
-- **CI/CD Integration**: GitHub Actions workflows from cicd-templates
-- **Monitoring**: Health checks and logging configuration
-- **Extensible**: Easy to customize for different application types
+- **Orchestration**: Docker Compose for local development and production deployment
+- **CI/CD Integration**: GitHub Actions workflows with Harbor integration
+- **Monitoring**: Prometheus and Grafana stack with custom metrics
+- **Kubernetes Ready**: Generated K8s manifests with security contexts and health checks
+- **Development Tools**: Hot reload, debugging, and admin interfaces
+- **Extensible**: Easy to customize for different application types and frameworks
 
 ## Quick Start
 
@@ -96,6 +101,41 @@ After running `./scripts/generate.sh`, additional files will be created:
 ├── .env.example               # Generated environment template
 └── template.config            # Your project configuration
 ```
+
+## Template Configuration
+
+The Docker template uses a configuration-driven approach to generate project-specific files. All values are customizable through the `template.config` file.
+
+### Key Configuration Options
+
+```bash
+# Application settings
+APP_NAME=my-app                    # Your application name
+APP_PORT=3000                      # Application port
+APP_USER=appuser                   # Container user
+APP_GROUP=appgroup                 # Container group
+
+# Docker image settings
+BASE_IMAGE=node                    # Base Docker image
+BASE_IMAGE_TAG=18.17.0-alpine3.18 # Image tag
+
+# Build configuration
+PACKAGE_FILES=package*.json        # Package/dependency files
+BUILD_COMMAND=npm run build        # Build command
+START_COMMAND=["npm", "start"]     # Production start command
+DEV_START_COMMAND=["npm", "run", "dev"] # Development start command
+
+# Harbor registry
+HARBOR_URL=harbor.local            # Your Harbor instance
+HARBOR_PROJECT=library             # Harbor project
+
+# Database and services
+DB_TYPE=postgres                   # Database type
+CACHE_TYPE=redis                   # Cache type
+ENABLE_MONITORING=true             # Enable Prometheus/Grafana
+```
+
+See [docs/examples.md](docs/examples.md) for complete configuration examples for different programming languages.
 
 ## Docker Configuration
 
@@ -240,14 +280,23 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 ## CI/CD Integration
 
-This template integrates with the automation-infra CI/CD templates:
+This template integrates with Harbor registry and generates GitHub Actions workflows based on your configuration.
 
-### GitHub Actions Workflow
-- Uses `cicd-templates/examples/main-docker-deploy.yml`
+### Automatic Workflow Generation
+
+The template generates CI/CD workflows customized for your:
+- Application type and build requirements
+- Harbor registry configuration  
+- Security scanning preferences
+- Deployment targets (staging/production)
+
+### Generated Workflow Features
 - Automated container building and testing
-- Security scanning with Trivy
-- Multi-platform builds
-- Container registry publishing
+- Security scanning with Trivy and Harbor
+- Multi-platform builds (AMD64/ARM64)
+- Harbor registry publishing
+- Vulnerability scanning integration
+- Environment-specific deployments
 
 ### Workflow Configuration
 ```yaml

@@ -19,7 +19,7 @@
     method: GET
     status_code: 200
   register: api_health
-  ignore_errors: yes
+  failed_when: false
 
 - name: Health Check - UI Access
   uri:
@@ -27,7 +27,7 @@
     method: GET
     status_code: 200
   register: ui_health
-  ignore_errors: yes
+  failed_when: false
 
 - name: Health Check - Admin Authentication
   uri:
@@ -38,7 +38,7 @@
     force_basic_auth: yes
     status_code: 200
   register: auth_health
-  ignore_errors: yes
+  failed_when: false
 
 - name: Health Check - Database Connectivity
   postgresql_query:
@@ -48,7 +48,7 @@
     db: "{{ artifactory_db_name }}"
     query: "SELECT version()"
   register: db_health
-  ignore_errors: yes
+  failed_when: false
 
 - name: Health Check - Storage Space
   shell: "df -h {{ artifactory_data_dir }} | tail -1"
