@@ -38,6 +38,27 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Function to generate template files
+generate_template_files() {
+    print_status "Generating template files..."
+    
+    if [[ ! -f "scripts/generate.sh" ]]; then
+        print_error "Template generation script not found"
+        exit 1
+    fi
+    
+    # Make generate script executable
+    chmod +x scripts/generate.sh
+    
+    # Run template generation
+    if ./scripts/generate.sh "$TEMPLATE_CONFIG"; then
+        print_success "Template files generated successfully"
+    else
+        print_error "Failed to generate template files"
+        exit 1
+    fi
+}
+
 # Function to check Docker installation
 check_docker() {
     print_status "Checking Docker installation..."
@@ -122,27 +143,32 @@ install_optional_tools() {
 create_env_files() {
     print_status "Creating environment configuration files..."
     
-    # Create .env.example
-    cat > .env.example << 'EOF'
+    # Load configuration for environment values
+    if [[ -f "$TEMPLATE_CONFIG" ]]; then
+        source "$TEMPLATE_CONFIG"
+    fi
+    
+    # Create environment template
+    cat > .env.template << 'EOF'
 # Database Configuration
-DB_NAME=myapp
-DB_USER=appuser
+DB_NAME={{APP_NAME}}
+DB_USER={{APP_USER}}
 DB_PASSWORD=your_secure_password_here
 
-# Redis Configuration
-REDIS_PASSWORD=your_redis_password_here
+# Cache Configuration  
+CACHE_PASSWORD=your_cache_password_here
 
 # Application Configuration
-PORT=3000
-NODE_ENV=production
+PORT={{APP_PORT}}
+{{ENV_VAR_NAME}}=production
 
 # Monitoring Configuration
 GRAFANA_USER=admin
 GRAFANA_PASSWORD=your_grafana_password_here
 
-# Docker Registry
-DOCKER_REGISTRY=harbor.local
-IMAGE_NAME=my-docker-project
+# Harbor Registry
+HARBOR_REGISTRY={{HARBOR_URL}}
+IMAGE_NAME={{APP_NAME}}
 IMAGE_TAG=latest
 
 # Security
@@ -154,50 +180,31 @@ EXTERNAL_API_URL=https://api.example.com
 EXTERNAL_API_KEY=your_api_key_here
 EOF
 
-    # Create .env for development
+    # Substitute template variables
+    local env_content=$(cat .env.template)
+    
+    # Replace template variables with actual values
+    env_content=${env_content//\{\{APP_NAME\}\}/${APP_NAME:-my-app}}
+    env_content=${env_content//\{\{APP_USER\}\}/${APP_USER:-appuser}}
+    env_content=${env_content//\{\{APP_PORT\}\}/${APP_PORT:-3000}}
+    env_content=${env_content//\{\{ENV_VAR_NAME\}\}/${ENV_VAR_NAME:-NODE_ENV}}
+    env_content=${env_content//\{\{HARBOR_URL\}\}/${HARBOR_URL:-harbor.local}}
+    
+    # Create .env.example
+    echo "$env_content" > .env.example
+    
+    # Create .env for development if it doesn't exist
     if [[ ! -f .env ]]; then
-        cp .env.example .env
+        echo "$env_content" > .env
         print_success "Created .env file from template"
         print_warning "Please update .env with your actual configuration values"
     else
         print_warning ".env file already exists. Skipping creation."
     fi
     
-    # Create .env.prod template
-    cat > .env.prod.example << 'EOF'
-# Production Environment Configuration
-# Copy this file to .env.prod and update with production values
-
-# Database Configuration
-DB_NAME=myapp_prod
-DB_USER=produser
-DB_PASSWORD=CHANGE_ME_PRODUCTION_PASSWORD
-
-# Redis Configuration
-REDIS_PASSWORD=CHANGE_ME_REDIS_PASSWORD
-
-# Application Configuration
-PORT=3000
-NODE_ENV=production
-
-# Monitoring Configuration
-GRAFANA_USER=admin
-GRAFANA_PASSWORD=CHANGE_ME_GRAFANA_PASSWORD
-
-# Docker Registry
-DOCKER_REGISTRY=harbor.local
-IMAGE_NAME=my-docker-project
-IMAGE_TAG=latest
-
-# Security (Generate strong secrets!)
-SECRET_KEY=CHANGE_ME_SECRET_KEY
-JWT_SECRET=CHANGE_ME_JWT_SECRET
-
-# External Services
-EXTERNAL_API_URL=https://api.production.com
-EXTERNAL_API_KEY=CHANGE_ME_API_KEY
-EOF
-
+    # Remove template file
+    rm -f .env.template
+    
     print_success "Environment configuration files created"
 }
 
@@ -1546,12 +1553,12 @@ main() {
     echo
     
     # Run setup steps
+    generate_template_files
     check_docker
     install_optional_tools
     create_env_files
     create_app_structure
     create_config_files
-    create_k8s_manifests
     create_cicd_workflow
     create_utility_scripts
     create_gitignore

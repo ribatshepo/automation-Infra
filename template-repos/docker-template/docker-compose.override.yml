@@ -1,6 +1,7 @@
-# docker-compose.override.yml
+# docker-compose.override.yml.template
 # This file is automatically loaded by docker-compose
 # Use it for local development overrides
+# Copy to docker-compose.override.yml and customize
 
 version: '3.8'
 
@@ -12,7 +13,7 @@ services:
       - LOG_LEVEL=debug
     # Add additional ports if needed
     # ports:
-    #   - "3001:3001"
+    #   - "{{ADDITIONAL_PORT}}:{{ADDITIONAL_PORT}}"
     
     # Mount additional volumes for development
     # volumes:

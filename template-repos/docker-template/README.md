@@ -20,19 +20,32 @@ gh repo create my-docker-project --template automation-infra/docker-template
 cd my-docker-project
 ```
 
-### 2. Initialize Project
+### 2. Configure Template
 ```bash
-# Run setup script
-./scripts/setup.sh
+# Copy configuration template
+cp template.config.example template.config
 
-# Build containers
-docker-compose build
+# Edit configuration for your project
+# Update values like APP_NAME, BASE_IMAGE, HARBOR_URL, etc.
+nano template.config
 ```
 
-### 3. Configure CI/CD
+### 3. Generate Project Files
 ```bash
-# Set up GitHub Actions (optional)
-./scripts/setup-cicd.sh
+# Generate Dockerfiles and compose files from templates
+./scripts/generate.sh
+
+# Initialize project
+./scripts/setup.sh
+```
+
+### 4. Build and Run
+```bash
+# Build containers
+make build
+
+# Start development environment
+make up
 ```
 
 ## Project Structure
@@ -40,38 +53,48 @@ docker-compose build
 ```
 docker-template/
 ├── README.md                    # This file
+├── template.config.example      # Template configuration
 ├── .gitignore                   # Git ignore patterns
 ├── .dockerignore               # Docker ignore patterns
-├── Dockerfile                  # Multi-stage production build
-├── Dockerfile.dev              # Development build
-├── docker-compose.yml          # Production compose
-├── docker-compose.dev.yml      # Development compose
-├── docker-compose.override.yml # Local overrides
+├── Dockerfile.template         # Production Dockerfile template
+├── Dockerfile.dev.template     # Development Dockerfile template
+├── container-structure-test.yaml # Container testing config
+├── .dive-ci.yml                # Image analysis config
 ├── .github/                    # GitHub workflows
 │   └── workflows/
-│       └── ci.yml              # Basic CI workflow
+│       └── ci.yml              # CI/CD workflow template
 ├── scripts/                    # Setup and utility scripts
+│   ├── generate.sh             # Template generation script
 │   ├── setup.sh               # Project initialization
-│   ├── setup-cicd.sh          # CI/CD setup
 │   ├── build.sh               # Build containers
 │   ├── deploy.sh              # Deploy containers
 │   ├── security-check.sh      # Security scanning
-│   └── clean.sh               # Cleanup containers
-├── config/                     # Configuration files
+│   ├── clean.sh               # Cleanup containers
+│   ├── harbor.sh              # Harbor integration
+│   └── setup-cicd.sh          # CI/CD setup
+├── config/                     # Configuration templates
 │   ├── nginx/                  # Nginx configuration
 │   ├── prometheus/             # Monitoring config
 │   └── grafana/               # Visualization config
-├── app/                        # Application code
-│   ├── src/                    # Source files
-│   ├── public/                 # Static files
-│   └── requirements.txt        # Dependencies (example)
-├── k8s/                        # Kubernetes manifests
-│   ├── deployment.yaml         # Application deployment
-│   ├── service.yaml           # Service definition
-│   └── ingress.yaml           # Ingress configuration
-└── docs/                       # Documentation
-    ├── deployment.md
-    └── monitoring.md
+├── docs/                       # Documentation
+│   ├── deployment.md
+│   └── monitoring.md
+└── Makefile                    # Build automation
+```
+
+After running `./scripts/generate.sh`, additional files will be created:
+```
+├── Dockerfile                  # Generated production Dockerfile
+├── Dockerfile.dev              # Generated development Dockerfile  
+├── docker-compose.yml          # Generated production compose
+├── docker-compose.dev.yml      # Generated development compose
+├── k8s/                        # Generated Kubernetes manifests
+│   ├── deployment.yaml
+│   ├── service.yaml
+│   └── ingress.yaml
+├── app/                        # Application source code
+├── .env.example               # Generated environment template
+└── template.config            # Your project configuration
 ```
 
 ## Docker Configuration
