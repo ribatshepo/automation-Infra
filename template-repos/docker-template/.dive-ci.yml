@@ -1,0 +1,10 @@
+rules:
+  - name: 'wasted-bytes-0.1'
+    selector: 'wasted-bytes > 0.1GB'
+    action: 'warn'
+  - name: 'efficiency-0.9'
+    selector: 'efficiency < 0.9'
+    action: 'warn'
+  - name: 'wasted-bytes-0.05'
+    selector: 'wasted-bytes > 0.05GB'
+    action: 'info'

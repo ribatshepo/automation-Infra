@@ -1,0 +1,43 @@
+# Development Dockerfile
+
+FROM node:18.17.0-alpine3.18
+
+# Install development tools
+RUN apk update && \
+    apk add --no-cache \
+        curl \
+        git \
+        bash \
+        && rm -rf /var/cache/apk/*
+
+# Create app user and group
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -S appuser -u 1001 -G appgroup
+
+# Set working directory
+WORKDIR /app
+
+# Install global development tools
+RUN npm install -g nodemon
+
+# Copy package files
+COPY package*.json ./
+
+# Install all dependencies (including dev)
+RUN npm install && \
+    npm cache clean --force
+
+# Change ownership of node_modules
+RUN chown -R appuser:appgroup /app
+
+# Switch to non-root user
+USER appuser
+
+# Expose port
+EXPOSE 3000
+
+# Set development environment
+ENV NODE_ENV=development
+
+# Start application with nodemon for hot reload
+CMD ["npm", "run", "dev"]

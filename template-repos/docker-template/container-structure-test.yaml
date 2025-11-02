@@ -1,0 +1,68 @@
+schemaVersion: 2.0.0
+
+fileExistenceTests:
+  - name: 'app directory exists'
+    path: '/app'
+    shouldExist: true
+    isDirectory: true
+  
+  - name: 'package.json exists'
+    path: '/app/package.json'
+    shouldExist: true
+  
+  - name: 'node_modules exists'
+    path: '/app/node_modules'
+    shouldExist: true
+    isDirectory: true
+  
+  - name: 'healthcheck script exists'
+    path: '/usr/local/bin/healthcheck.sh'
+    shouldExist: true
+
+fileContentTests:
+  - name: 'package.json contains correct name'
+    path: '/app/package.json'
+    expectedContents: ['my-docker-project']
+  
+  - name: 'package.json contains start script'
+    path: '/app/package.json'
+    expectedContents: ['"start"']
+
+commandTests:
+  - name: 'node version check'
+    command: 'node'
+    args: ['--version']
+    expectedOutput: ['v18.*']
+  
+  - name: 'npm version check'
+    command: 'npm'
+    args: ['--version']
+    expectedOutput: ['.*']
+  
+  - name: 'curl is available'
+    command: 'curl'
+    args: ['--version']
+    expectedOutput: ['curl.*']
+  
+  - name: 'healthcheck script is executable'
+    command: 'test'
+    args: ['-x', '/usr/local/bin/healthcheck.sh']
+  
+  - name: 'application files are owned by appuser'
+    command: 'stat'
+    args: ['-c', '%U', '/app/package.json']
+    expectedOutput: ['appuser']
+
+metadataTest:
+  exposedPorts: ["3000"]
+  user: "appuser"
+  workdir: "/app"
+  env:
+    - key: 'NODE_ENV'
+      value: 'production'
+    - key: 'PORT'
+      value: '3000'
+
+licenseTests:
+  - debian: false
+    files: ["/app/package.json"]
