@@ -1,3 +1,11 @@
+# Generated files from templates
+Dockerfile
+Dockerfile.dev
+docker-compose.yml
+docker-compose.dev.yml
+docker-compose.override.yml
+template.config
+
 # Environment files
 .env
 .env.local
